@@ -1,0 +1,50 @@
+{
+  "name": "smle",
+  "version": "1.0.0",
+  "description": "Social Media Listening Engine",
+  "main": "src/api/server.js",
+  "scripts": {
+    "serp": "node src/scripts/runSerpSearch.js",
+    "search-tiktok": "node src/scripts/searchTikTok.js",
+    "search-reddit": "node src/scripts/searchReddit.js",
+    "search-reddit-dual": "node src/scripts/searchRedditDual.js",
+    "search-youtube": "node src/scripts/searchYouTube.js",
+    "scrape": "node src/scripts/scrapeInstagramPosts.js",
+    "scrape-tiktok": "node src/scripts/scrapeTikTokPosts.js",
+    "scrape-posts": "node src/scripts/scrapePosts.js",
+    "analyze": "node src/scripts/analyzeInstagramPosts.js",
+    "analyze-tiktok": "node src/scripts/analyzeTikTokPosts.js",
+    "analyze-posts": "node src/scripts/analyzePosts.js",
+    "reanalyze": "node src/scripts/reanalyzeCampaign.js",
+    "analytics": "node src/scripts/generateAnalytics.js",
+    "create-indexes": "node src/scripts/createIndexes.js",
+    "create-dedup-indexes": "node src/scripts/createDeduplicationIndexes.js",
+    "create-vector-indexes": "node src/scripts/createVectorIndexes.js",
+    "generate-embeddings": "node src/scripts/generateEmbeddings.js",
+    "setup:auth": "node src/scripts/setupAuth.js",
+    "api": "node src/api/server.js",
+    "dev": "nodemon src/api/server.js"
+  },
+  "keywords": [
+    "social-media",
+    "listening",
+    "bright-data"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.6.2",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "couchbase": "^4.3.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "nodemon": "^3.0.2"
+  }
+}
