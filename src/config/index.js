@@ -8,6 +8,16 @@ const config = {
       username: process.env.CB_USERNAME,
       password: process.env.CB_PASSWORD,
       bucketName: process.env.CB_BUCKET || 'SMLE'
+    },
+    cratedb: {
+      connectionString: process.env.CRATE_CONNECTION_STRING || 'postgres://crate@localhost:5432/doc',
+      username: process.env.CRATE_USERNAME || 'crate',
+      password: process.env.CRATE_PASSWORD || ''
+    },
+    postgres: {
+      connectionString: process.env.POSTGRES_CONNECTION_STRING || 'postgres://postgres:postgres@localhost:5432/smle',
+      username: process.env.POSTGRES_USERNAME || 'postgres',
+      password: process.env.POSTGRES_PASSWORD || 'postgres'
     }
   },
 
@@ -81,15 +91,23 @@ const config = {
 
 // Validate required config
 function validateConfig() {
-  const required = [
-    'db.couchbase.username',
-    'db.couchbase.password',
+  const commonRequired = [
     'brightData.apiKey'
   ];
 
+  const dbType = config.db.type.toLowerCase();
+
+  if (dbType === 'couchbase') {
+    commonRequired.push('db.couchbase.username');
+    commonRequired.push('db.couchbase.password');
+  } else if (dbType === 'cratedb' || dbType === 'postgres') {
+    // For CrateDB/Postgres, we mainly need the connection string
+    commonRequired.push('db.cratedb.connectionString');
+  }
+
   const missing = [];
 
-  required.forEach(path => {
+  commonRequired.forEach(path => {
     const keys = path.split('.');
     let value = config;
     keys.forEach(key => {
@@ -102,6 +120,7 @@ function validateConfig() {
     throw new Error(`Missing required configuration: ${missing.join(', ')}`);
   }
 }
+
 
 validateConfig();
 

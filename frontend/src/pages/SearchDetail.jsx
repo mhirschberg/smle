@@ -12,7 +12,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 const SearchDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
-  
+
   const [campaign, setCampaign] = useState(null);
   const [runs, setRuns] = useState([]);
   const [posts, setPosts] = useState([]);
@@ -28,7 +28,7 @@ const SearchDetail = () => {
 
   useEffect(() => {
     loadData();
-    
+
     // Auto-refresh every 15 seconds
     const interval = setInterval(loadData, 15000);
     return () => clearInterval(interval);
@@ -40,12 +40,12 @@ const SearchDetail = () => {
       if (!campaign) {
         setLoading(true);
       }
-      
+
       const [campaignRes, runsRes, postsRes, statsRes, trendRes] = await Promise.all([
         searchApi.getById(id),
         searchApi.getRuns(id, { limit: 50 }),
-        searchApi.getPosts(id, { 
-          limit: 100, 
+        searchApi.getPosts(id, {
+          limit: 100,
           sentiment: sentimentFilter,
           run_id: selectedRun,
           platform: platformFilter !== 'all' ? platformFilter : null
@@ -70,14 +70,14 @@ const SearchDetail = () => {
     try {
       setTriggering(true);
       await searchApi.triggerRun(id);
-      
+
       alert('Campaign run started! The page will refresh automatically as it progresses.');
-      
+
       setTimeout(() => {
         loadData();
         setTriggering(false);
       }, 2000);
-      
+
     } catch (error) {
       console.error('Failed to trigger run:', error);
       alert('Failed to start campaign run');
@@ -155,6 +155,11 @@ const SearchDetail = () => {
               <h1 className="text-3xl font-bold text-gray-800 mb-2">
                 {campaign.search_query}
               </h1>
+              {campaign.description && (
+                <p className="text-gray-600 mb-4 italic max-w-3xl border-l-4 border-blue-200 pl-4 py-1">
+                  {campaign.description}
+                </p>
+              )}
               <div className="flex items-center space-x-4 text-sm text-gray-600 flex-wrap">
                 <div className="flex items-center space-x-1">
                   {platforms.map(p => (
@@ -174,7 +179,7 @@ const SearchDetail = () => {
                 )}
               </div>
             </div>
-            
+
             {/* Action Buttons */}
             <div className="flex items-center space-x-3">
               <button
@@ -194,7 +199,7 @@ const SearchDetail = () => {
                   </>
                 )}
               </button>
-              
+
               <button
                 onClick={() => setShowDeleteConfirm(true)}
                 className="flex items-center space-x-2 px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition-colors font-medium border border-red-200"
@@ -253,22 +258,20 @@ const SearchDetail = () => {
         <div className="flex border-b border-gray-200 overflow-x-auto">
           <button
             onClick={() => setActiveTab('search')}
-            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${
-              activeTab === 'search'
+            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'search'
                 ? 'text-purple-600 border-b-2 border-purple-600'
                 : 'text-gray-600 hover:text-gray-800'
-            }`}
+              }`}
           >
             <Search className="w-4 h-4" />
             <span>AI Search</span>
           </button>
           <button
             onClick={() => setActiveTab('overview')}
-            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${
-              activeTab === 'overview'
+            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'overview'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-gray-600 hover:text-gray-800'
-            }`}
+              }`}
           >
             <BarChart3 className="w-4 h-4" />
             <span>Overview</span>
@@ -276,11 +279,10 @@ const SearchDetail = () => {
           {isMultiPlatform && (
             <button
               onClick={() => setActiveTab('platforms')}
-              className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${
-                activeTab === 'platforms'
+              className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'platforms'
                   ? 'text-blue-600 border-b-2 border-blue-600'
                   : 'text-gray-600 hover:text-gray-800'
-              }`}
+                }`}
             >
               <Layers className="w-4 h-4" />
               <span>By Platform</span>
@@ -288,22 +290,20 @@ const SearchDetail = () => {
           )}
           <button
             onClick={() => setActiveTab('runs')}
-            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${
-              activeTab === 'runs'
+            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'runs'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-gray-600 hover:text-gray-800'
-            }`}
+              }`}
           >
             <History className="w-4 h-4" />
             <span>Run History ({runs.length})</span>
           </button>
           <button
             onClick={() => setActiveTab('posts')}
-            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${
-              activeTab === 'posts'
+            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'posts'
                 ? 'text-blue-600 border-b-2 border-blue-600'
                 : 'text-gray-600 hover:text-gray-800'
-            }`}
+              }`}
           >
             <MessageCircle className="w-4 h-4" />
             <span>All Posts ({stats?.total_posts || 0})</span>
@@ -333,11 +333,11 @@ const SearchDetail = () => {
                   <span>Refresh</span>
                 </button>
               </div>
-              <SentimentOverTimeChart 
+              <SentimentOverTimeChart
                 data={trend.map(t => ({
                   date: `Run #${t.run_number}`,
                   avg_sentiment: t.avg_sentiment
-                }))} 
+                }))}
               />
             </div>
           )}
@@ -348,16 +348,16 @@ const SearchDetail = () => {
               <h3 className="text-xl font-semibold text-gray-800 mb-4">
                 Overall Sentiment Distribution
               </h3>
-              <SentimentDistributionChart 
+              <SentimentDistributionChart
                 data={{
                   counts: {
                     positive: stats.positive_count || 0,
                     neutral: stats.neutral_count || 0,
                     negative: stats.negative_count || 0
                   }
-                }} 
+                }}
               />
-              
+
               <div className="grid grid-cols-3 gap-4 mt-6">
                 <div className="text-center">
                   <div className="text-3xl font-bold text-green-600">
@@ -389,12 +389,12 @@ const SearchDetail = () => {
             <h3 className="text-xl font-semibold text-gray-800 mb-4">
               Performance by Platform
             </h3>
-            
+
             {/* Platform Breakdown */}
             {runs.length > 0 && runs[0].stats?.by_platform && (
               <div className="space-y-4">
                 {Object.entries(runs[0].stats.by_platform).map(([platform, platformStats]) => (
-                  <div 
+                  <div
                     key={platform}
                     onClick={() => {
                       setPlatformFilter(platform);
@@ -421,7 +421,7 @@ const SearchDetail = () => {
                         </div>
                       )}
                     </div>
-                    
+
                     <div className="grid grid-cols-3 gap-3 text-center text-sm">
                       <div className="bg-white rounded p-2">
                         <div className="font-bold text-gray-800">
@@ -446,7 +446,7 @@ const SearchDetail = () => {
                 ))}
               </div>
             )}
-            
+
             {(!runs.length || !runs[0].stats?.by_platform) && (
               <div className="text-center py-8 text-gray-500">
                 <Layers className="w-12 h-12 mx-auto mb-3 text-gray-400" />
@@ -502,8 +502,8 @@ const SearchDetail = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {runs.map(run => (
-                <RunHistoryCard 
-                  key={run.id} 
+                <RunHistoryCard
+                  key={run.id}
                   run={run}
                   onClick={() => {
                     setSelectedRun(run.id);
@@ -536,11 +536,10 @@ const SearchDetail = () => {
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setPlatformFilter('all')}
-                  className={`px-4 py-2 rounded-lg border-2 transition-all ${
-                    platformFilter === 'all'
+                  className={`px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === 'all'
                       ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
                       : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-                  }`}
+                    }`}
                 >
                   All Platforms
                 </button>
@@ -548,11 +547,10 @@ const SearchDetail = () => {
                   <button
                     key={platform}
                     onClick={() => setPlatformFilter(platform)}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg border-2 transition-all ${
-                      platformFilter === platform
+                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === platform
                         ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
                         : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-                    }`}
+                      }`}
                   >
                     <span className="text-lg">{getPlatformIcon(platform)}</span>
                     <span className="capitalize">{platform}</span>

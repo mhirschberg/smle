@@ -22,6 +22,7 @@
     "create-vector-indexes": "node src/scripts/createVectorIndexes.js",
     "generate-embeddings": "node src/scripts/generateEmbeddings.js",
     "setup:auth": "node src/scripts/setupAuth.js",
+    "setup:postgres": "node src/scripts/setupPostgres.js",
     "api": "node src/api/server.js",
     "dev": "nodemon src/api/server.js"
   },
@@ -41,6 +42,7 @@
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.3",
+    "pg": "^8.16.3",
     "uuid": "^9.0.1"
   },
   "devDependencies": {

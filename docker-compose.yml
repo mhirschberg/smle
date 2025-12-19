@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  # Postgres with pgvector (Primary DB)
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-smle}
+    volumes:
+      - ./db_data/postgres:/var/lib/postgresql/data

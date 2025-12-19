@@ -140,6 +140,11 @@ const SearchCard = ({ search, onClick, onDelete, onStatusChange }) => {
               <h3 className="text-xl font-semibold text-gray-800 mb-2">
                 {searchQuery}
               </h3>
+              {(search.description || search.s?.description) && (
+                <p className="text-sm text-gray-600 mb-3 line-clamp-2 italic">
+                  {search.description || search.s?.description}
+                </p>
+              )}
               <div className="flex items-center space-x-3 text-sm text-gray-500">
                 {/* Platform Names */}
                 <div className="flex items-center space-x-2 flex-wrap gap-y-1">

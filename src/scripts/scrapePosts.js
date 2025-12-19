@@ -1,34 +1,36 @@
 const { v4: uuidv4 } = require('uuid');
-const couchbaseClient = require('../modules/storage/couchbaseClient');
+const dbFactory = require('../modules/storage/dbFactory');
+const campaignRepository = require('../modules/repositories/campaignRepository');
 const platformManager = require('../modules/platforms/platformManager');
 const snapshotMonitor = require('../modules/scraper/snapshotMonitor');
 const logger = require('../utils/logger');
 
 async function scrapePosts(campaignId, runId, specificPlatform = null) {
+  let db;
   try {
     logger.setContext(campaignId, runId);
     logger.info('=== Starting Post Scraping ===', { campaignId, runId, specificPlatform });
-    
-    // Step 1: Connect to Couchbase
-    logger.info('Step 1: Connecting to Couchbase...');
-    await couchbaseClient.connect();
-    
+
+    // Step 1: Connect to DB
+    logger.info('Step 1: Connecting to Database...');
+    db = await dbFactory.getDB();
+
     // Step 2: Fetch run document
     logger.info('Step 2: Fetching run document...');
-    const run = await couchbaseClient.get('search_runs', runId);
-    
+    const run = await campaignRepository.getRun(runId);
+
     if (!run) {
       throw new Error(`Run document not found: ${runId}`);
     }
-    
+
     // Step 3: Fetch campaign document
     logger.info('Step 3: Fetching campaign document...');
-    const campaign = await couchbaseClient.get('searches', campaignId);
-    
+    const campaign = await campaignRepository.getById(campaignId);
+
     if (!campaign) {
       throw new Error(`Campaign document not found: ${campaignId}`);
     }
-    
+
     // Determine which platform to scrape
     let platform;
     if (specificPlatform) {
@@ -38,30 +40,30 @@ async function scrapePosts(campaignId, runId, specificPlatform = null) {
     } else {
       platform = campaign.platform;
     }
-    
+
     // Get URLs for this specific platform
     const urlsForPlatform = run.links_by_platform?.[platform] || run.links || [];
-    
+
     logger.info('Documents loaded', {
       campaign: campaign.search_query,
       platform: platform,
       runNumber: run.run_number,
       urlCount: urlsForPlatform.length
     });
-    
+
     if (urlsForPlatform.length === 0) {
       logger.warn(`No URLs to scrape for ${platform}`);
       return { success: true, postsScraped: 0, postsFailed: 0 };
     }
-    
+
     // Step 4: Get platform-specific scraper
     if (!platformManager.isSupported(platform)) {
       throw new Error(`Platform '${platform}' is not supported yet`);
     }
-    
+
     const scraper = platformManager.getScraper(platform);
     const collection = platformManager.getCollection(platform);
-    
+
     // Step 5: Sanitize and validate URLs
     const urlSanitizer = require('../utils/urlSanitizer');
     const sanitizedUrls = urlSanitizer.sanitizeUrls(urlsForPlatform, platform);
@@ -73,17 +75,24 @@ async function scrapePosts(campaignId, runId, specificPlatform = null) {
       removed: urlsForPlatform.length - sanitizedUrls.length
     });
 
-if (sanitizedUrls.length === 0) {
-  logger.warn(`No valid URLs to scrape for ${platform} after sanitization`);
-  return { success: true, postsScraped: 0, postsFailed: 0 };
-}
+    if (sanitizedUrls.length === 0) {
+      logger.warn(`No valid URLs to scrape for ${platform} after sanitization`);
+      return { success: true, postsScraped: 0, postsFailed: 0 };
+    }
 
-// Step 6: Trigger scraping
-const urlsToScrape = sanitizedUrls;
-logger.info(`Step 6: Triggering ${platform} scrape...`, { 
-  urlCount: urlsToScrape.length 
-});const snapshotId = await scraper.triggerScrape(urlsToScrape);
-    
+    // Step 6: Trigger scraping
+    // RESPECT LIMIT: Read from settings
+    const platformLimit = campaign.settings?.[`${platform}_post_limit`] || campaign.settings?.generic_post_limit || 100;
+    const urlsToScrape = sanitizedUrls.slice(0, platformLimit);
+
+    if (sanitizedUrls.length > platformLimit) {
+      logger.info(`Limiting scraping to ${platformLimit} posts per settings (originally ${sanitizedUrls.length} valid URLs)`);
+    }
+
+    logger.info(`Step 6: Triggering ${platform} scrape...`, {
+      urlCount: urlsToScrape.length
+    }); const snapshotId = await scraper.triggerScrape(urlsToScrape);
+
     // Update run document with snapshot ID
     if (!run.snapshot_ids) {
       run.snapshot_ids = {};
@@ -91,10 +100,10 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
     run.snapshot_ids[platform] = snapshotId;
     run.snapshot_status = 'running';
     run.updated_at = new Date().toISOString();
-    await couchbaseClient.upsert('search_runs', runId, run);
-    
+    await campaignRepository.updateRun(runId, run);
+
     logger.info('Snapshot triggered', { platform, snapshotId });
-    
+
     // Step 6: Monitor snapshot
     logger.info('Step 6: Monitoring snapshot...');
     await snapshotMonitor.waitForCompletion(
@@ -108,13 +117,13 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
         }
       }
     );
-    
+
     // Step 7: Download results
     logger.info('Step 7: Downloading snapshot...');
     let posts = [];
     let retries = 0;
     const maxRetries = 3;
-    
+
     while (retries < maxRetries) {
       try {
         posts = await scraper.downloadSnapshot(snapshotId);
@@ -128,33 +137,33 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
     }
-    
+
     logger.info(`Downloaded ${posts.length} posts for ${platform}`);
-    
+
     // Step 8: Store posts with optional relevance filtering and deduplication
     logger.info('Step 8: Storing posts with filtering and deduplication...');
-    
+
     const postDeduplicator = require('../modules/storage/postDeduplicator');
     const relevanceFilter = require('../modules/analysis/relevanceFilter');
-    
+
     const enableRelevanceFilter = campaign.settings?.enable_relevance_filter || false;
     const relevanceThreshold = campaign.settings?.relevance_threshold || 0.7;
-    
+
     const now = new Date().toISOString();
     let successCount = 0;
     let failCount = 0;
     let filteredCount = 0;
     let updatedCount = 0;
     let newCount = 0;
-    
+
     const runNumber = run.run_number;
-    
+
     logger.info('Processing settings', {
       relevanceFilterEnabled: enableRelevanceFilter,
       relevanceThreshold,
       totalPosts: posts.length
     });
-    
+
     for (const rawPost of posts) {
       try {
         // Optional: Relevance filtering
@@ -164,7 +173,7 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
             campaign.search_query,
             relevanceThreshold
           );
-          
+
           if (!relevanceCheck.isRelevant) {
             logger.info('Post filtered out (not relevant)', {
               url: rawPost.url,
@@ -174,16 +183,16 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
             filteredCount++;
             continue;
           }
-          
+
           logger.debug('Post passed relevance filter', {
             url: rawPost.url,
             score: relevanceCheck.score
           });
         }
-        
+
         // Check if post already exists (deduplication)
         const existing = await postDeduplicator.findExistingPost(rawPost.url, collection);
-        
+
         if (existing) {
           await postDeduplicator.updateExistingPost(
             existing.docId,
@@ -193,7 +202,7 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
             runId,
             collection
           );
-          
+
           updatedCount++;
           successCount++;
         } else {
@@ -207,24 +216,24 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
             runNumber,
             now
           );
-          
+
           const postDocument = mapPostToPlatform(rawPost, platform, campaignId, runId, now, baseDoc);
-          
-          await couchbaseClient.insert(collection, postId, postDocument);
+
+          await db.upsert(collection, postId, postDocument);
           newCount++;
           successCount++;
         }
-        
+
       } catch (error) {
-        logger.error('Failed to process post', { 
-          url: rawPost.url, 
-          error: error.message 
+        logger.error('Failed to process post', {
+          url: rawPost.url,
+          error: error.message
         });
         failCount++;
       }
     }
-    
-    logger.info('Posts processed', { 
+
+    logger.info('Posts processed', {
       platform,
       total: posts.length,
       new: newCount,
@@ -233,29 +242,33 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
       failed: failCount,
       relevanceFilterEnabled: enableRelevanceFilter
     });
-    
+
     // Step 9: Update run document with stats (per platform)
     logger.info('Step 9: Updating run document...');
-    
-    if (!run.stats.by_platform) {
-      run.stats.by_platform = {};
+
+    // CRITICAL: Reload run to avoid overwriting updates from parallel scrapers
+    const finalRun = await campaignRepository.getRun(runId);
+    if (!finalRun) throw new Error(`Final run document re-load failed: ${runId}`);
+
+    if (!finalRun.stats.by_platform) {
+      finalRun.stats.by_platform = {};
     }
-    
-    run.stats.by_platform[platform] = {
+
+    finalRun.stats.by_platform[platform] = {
       posts_scraped: successCount,
       posts_failed: failCount,
       posts_filtered: filteredCount,
       posts_new: newCount,
       posts_updated: updatedCount
     };
-    
-    // Update overall stats
-    run.stats.posts_scraped = (run.stats.posts_scraped || 0) + successCount;
-    run.stats.posts_failed = (run.stats.posts_failed || 0) + failCount;
-    run.updated_at = now;
-    
-    await couchbaseClient.upsert('search_runs', runId, run);
-    
+
+    // Update overall stats INCREMENTALLY
+    finalRun.stats.posts_scraped = (finalRun.stats.posts_scraped || 0) + successCount;
+    finalRun.stats.posts_failed = (finalRun.stats.posts_failed || 0) + failCount;
+    finalRun.updated_at = now;
+
+    await campaignRepository.updateRun(runId, finalRun);
+
     logger.info(`=== ${platform.toUpperCase()} Scraping Completed Successfully ===`, {
       campaignId,
       runId,
@@ -264,25 +277,24 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
       postsFiltered: filteredCount,
       postsFailed: failCount
     });
-    
+
     return {
       success: true,
       postsScraped: successCount,
       postsFiltered: filteredCount,
       postsFailed: failCount
     };
-    
+
   } catch (error) {
-    logger.error('Scraping failed', { 
+    logger.error('Scraping failed', {
       campaignId,
       runId,
       platform: specificPlatform,
-      error: error.message, 
-      stack: error.stack 
+      error: error.message,
+      stack: error.stack
     });
     throw error;
   } finally {
-    await couchbaseClient.disconnect();
     logger.clearContext();
   }
 }
@@ -293,7 +305,7 @@ logger.info(`Step 6: Triggering ${platform} scrape...`, {
 function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, baseDoc = null) {
   // Ensure platform is clean
   platform = platform.trim().toLowerCase();
-  
+
   // Use provided baseDoc or create default
   const baseDocument = baseDoc || {
     id: require('uuid').v4(),
@@ -357,7 +369,7 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           tagged_users: rawPost.tagged_users || []
         }
       };
-    
+
     case 'tiktok':
       return {
         ...baseDocument,
@@ -400,7 +412,7 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           post_type: rawPost.post_type
         }
       };
-    
+
     case 'twitter':
       return {
         ...baseDocument,
@@ -441,7 +453,7 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           context_added: rawPost.context_added
         }
       };
-    
+
     case 'reddit':
       return {
         ...baseDocument,
@@ -475,7 +487,7 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           bio_description: rawPost.bio_description
         }
       };
-    
+
     case 'facebook':
       return {
         ...baseDocument,
@@ -518,7 +530,7 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           delegate_page_id: rawPost.delegate_page_id
         }
       };
-    
+
     case 'youtube':
       return {
         ...baseDocument,
@@ -564,7 +576,7 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           post_type: rawPost.post_type
         }
       };
-    
+
     case 'linkedin':
       return {
         ...baseDocument,
@@ -609,9 +621,9 @@ function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, base
           more_relevant_posts: rawPost.more_relevant_posts || []
         }
       };
-    
+
     default:
-      logger.error('Unsupported platform in mapPostToPlatform', { 
+      logger.error('Unsupported platform in mapPostToPlatform', {
         platform,
         platformType: typeof platform,
         rawPlatform: JSON.stringify(platform),

@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
-const couchbaseClient = require('../modules/storage/couchbaseClient');
+const dbFactory = require('../modules/storage/dbFactory');
+const campaignRepository = require('../modules/repositories/campaignRepository');
 const redditScraper = require('../modules/scraper/redditScraper');
 const serpFetcher = require('../modules/serp/serpFetcher');
 const urlExtractor = require('../modules/serp/urlExtractor');
@@ -7,33 +8,38 @@ const snapshotMonitor = require('../modules/scraper/snapshotMonitor');
 const logger = require('../utils/logger');
 
 async function searchRedditDual(campaignId, runId) {
+  let db;
   try {
     logger.setContext(campaignId, runId);
-    
+
     logger.info('=== Starting Reddit DUAL Search (SERP + Keyword) ===', { campaignId, runId });
-    
-    await couchbaseClient.connect();
-    
-    const campaign = await couchbaseClient.get('searches', campaignId);
-    const run = await couchbaseClient.get('search_runs', runId);
-    
+
+    // Step 1: Connect to DB
+    logger.info('Step 1: Connecting to Database...');
+    db = await dbFactory.getDB();
+
+    // Step 2: Load campaign and run
+    logger.info('Step 2: Loading campaign and run...');
+    const campaign = await campaignRepository.getById(campaignId);
+    const run = await campaignRepository.getRun(runId);
+
     if (!campaign || !run) {
       throw new Error('Campaign or run not found');
     }
-    
+
     const searchQuery = campaign.search_query;
     const googleDomain = campaign.google_domain || 'google.com';
-    const postLimit = campaign.settings?.reddit_post_limit || 100;
-    
+    const postLimit = campaign.settings?.reddit_post_limit || campaign.settings?.generic_post_limit || 100;
+
     logger.info('Starting dual search', {
       query: searchQuery,
       postLimit,
       runNumber: run.run_number
     });
-    
+
     // PART 1: SERP Search for Reddit URLs
     logger.info('Part 1/2: Fetching Reddit URLs via Google SERP...');
-    
+
     let serpUrls = [];
     try {
       const serpResults = await serpFetcher.fetchResultsForPlatform(
@@ -41,35 +47,40 @@ async function searchRedditDual(campaignId, runId) {
         'reddit',
         googleDomain
       );
-      
+
       logger.info(`Fetched ${serpResults.length} SERP results`);
-      
+
       serpUrls = urlExtractor.extractUrls(serpResults, 'reddit');
       logger.info(`Extracted ${serpUrls.length} Reddit URLs from SERP`);
     } catch (error) {
       logger.error('SERP search failed', { error: error.message });
     }
-    
+
     // PART 2: Keyword Search for Reddit Posts
     logger.info('Part 2/2: Fetching Reddit posts via keyword search...');
-    
+
     const keywordOptions = {
       date: 'Past month',
       num_of_posts: postLimit,
       sort_by: 'Hot'
     };
-    
+
     const snapshotId = await redditScraper.triggerKeywordSearch(searchQuery, keywordOptions);
-    
+
     // RELOAD run to get latest state from parallel processes
-    const latestRun = await couchbaseClient.get('search_runs', runId);
-    
+    const latestRun = await campaignRepository.getRun(runId);
+
+    if (!latestRun) {
+      throw new Error(`Run document re-load failed: ${runId}`);
+    }
+
     latestRun.snapshot_id = snapshotId;
     latestRun.snapshot_status = 'running';
-    await couchbaseClient.upsert('search_runs', runId, latestRun);
-    
+    latestRun.updated_at = new Date().toISOString();
+    await campaignRepository.updateRun(runId, latestRun);
+
     logger.info('Keyword search triggered', { snapshotId });
-    
+
     // Monitor snapshot
     await snapshotMonitor.waitForCompletion(
       snapshotId,
@@ -79,11 +90,11 @@ async function searchRedditDual(campaignId, runId) {
         timeout: 1800000
       }
     );
-    
+
     // Download keyword results
     let keywordPosts = [];
     let retries = 0;
-    
+
     while (retries < 3) {
       try {
         keywordPosts = await redditScraper.downloadSnapshot(snapshotId);
@@ -94,12 +105,16 @@ async function searchRedditDual(campaignId, runId) {
         await new Promise(resolve => setTimeout(resolve, 30000));
       }
     }
-    
+
     logger.info(`Downloaded ${keywordPosts.length} Reddit posts from keyword search`);
-    
+
     // RELOAD run again to get latest state
-    const finalRun = await couchbaseClient.get('search_runs', runId);
-    
+    const finalRun = await campaignRepository.getRun(runId);
+
+    if (!finalRun) {
+      throw new Error(`Final run document re-load failed: ${runId}`);
+    }
+
     // Initialize if needed
     if (!finalRun.links_by_platform) {
       finalRun.links_by_platform = {};
@@ -107,10 +122,10 @@ async function searchRedditDual(campaignId, runId) {
     if (!finalRun.links) {
       finalRun.links = [];
     }
-    
+
     // Store SERP URLs for Reddit
     finalRun.links_by_platform.reddit = serpUrls;
-    
+
     // APPEND Reddit URLs to global links (don't replace!)
     const existingUrls = new Set(finalRun.links);
     serpUrls.forEach(url => {
@@ -118,18 +133,18 @@ async function searchRedditDual(campaignId, runId) {
         finalRun.links.push(url);
       }
     });
-    
+
     // Store keyword posts directly (they're already scraped)
     logger.info('Storing keyword posts directly...');
-    
+
     const now = new Date().toISOString();
     let keywordStored = 0;
     const keywordUrls = new Set();
-    
+
     for (const rawPost of keywordPosts) {
       try {
         keywordUrls.add(rawPost.url);
-        
+
         const postId = uuidv4();
         const postDocument = {
           id: postId,
@@ -143,7 +158,7 @@ async function searchRedditDual(campaignId, runId) {
           scraped_at: rawPost.timestamp || now,
           analysis_status: 'pending',
           source: 'keyword_search',
-          
+
           raw_data: {
             user_posted: rawPost.user_posted,
             title: rawPost.title,
@@ -171,7 +186,7 @@ async function searchRedditDual(campaignId, runId) {
             community_rank: rawPost.community_rank,
             bio_description: rawPost.bio_description
           },
-          
+
           analysis: {
             sentiment_score: null,
             sentiment_label: null,
@@ -185,37 +200,48 @@ async function searchRedditDual(campaignId, runId) {
             error: null
           }
         };
-        
-        await couchbaseClient.insert('reddit_posts', postId, postDocument);
+
+        await db.upsert('reddit_posts', postId, postDocument);
         keywordStored++;
-        
+
       } catch (error) {
         logger.error('Failed to store keyword post', { url: rawPost.url, error: error.message });
       }
     }
-    
+
     logger.info('Keyword posts stored', { count: keywordStored });
-    
+
     // Filter SERP URLs to avoid duplicates with keyword results
     const uniqueSerpUrls = serpUrls.filter(url => !keywordUrls.has(url));
-    
+
     logger.info('URL deduplication', {
       serpUrls: serpUrls.length,
       keywordUrls: keywordUrls.size,
       uniqueSerpUrls: uniqueSerpUrls.length
     });
-    
+
     // Update run with combined stats
-    finalRun.stats.urls_found = finalRun.links.length; // Total across ALL platforms
+    // CRITICAL: Increment global urls_found by the amount of unique SERP URLs we found
+    finalRun.stats.urls_found = (finalRun.stats.urls_found || 0) + uniqueSerpUrls.length;
+
+    // Add keyword posts to posts_scraped (since they are already scraped)
+    finalRun.stats.posts_scraped = (finalRun.stats.posts_scraped || 0) + keywordStored;
+
+    if (!finalRun.stats.by_platform) finalRun.stats.by_platform = {};
+    finalRun.stats.by_platform.reddit = {
+      serp_urls: uniqueSerpUrls.length,
+      keyword_posts: keywordStored
+    };
+
     finalRun.dual_search_stats = {
       serp_urls: uniqueSerpUrls.length,
       keyword_posts: keywordStored,
       duplicates_removed: serpUrls.length - uniqueSerpUrls.length
     };
     finalRun.updated_at = now;
-    
-    await couchbaseClient.upsert('search_runs', runId, finalRun);
-    
+
+    await campaignRepository.updateRun(runId, finalRun);
+
     logger.info('=== Reddit Dual Search Completed ===', {
       campaignId,
       runId,
@@ -223,22 +249,22 @@ async function searchRedditDual(campaignId, runId) {
       keywordPosts: keywordStored,
       total: uniqueSerpUrls.length + keywordStored
     });
-    
+
     return {
       success: true,
       serpUrls: uniqueSerpUrls.length,
       keywordPosts: keywordStored
     };
-    
+
   } catch (error) {
-    logger.error('Dual search failed', { 
+    logger.error('Dual search failed', {
       campaignId,
       runId,
-      error: error.message 
+      error: error.message
     });
     throw error;
   } finally {
-    await couchbaseClient.disconnect();
+    if (db) await db.disconnect();
     logger.clearContext();
   }
 }

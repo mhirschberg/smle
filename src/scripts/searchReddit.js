@@ -221,8 +221,9 @@ async function searchReddit(campaignId, runId) {
     // The DBFactory maintains a singleton. We might need a proper shutdown method.
     // For now, allow process.exit to handle it or we can expose a disconnect method.
     const dbFactory = require('../modules/storage/dbFactory');
-    if (dbFactory.instance) {
-      await dbFactory.instance.disconnect();
+    const db = await dbFactory.getDB();
+    if (db) {
+      await db.disconnect();
     }
     logger.clearContext();
   }

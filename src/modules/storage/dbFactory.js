@@ -1,42 +1,35 @@
 const config = require('../../config');
 const CouchbaseAdapter = require('./adapters/couchbaseAdapter');
+const CrateDbAdapter = require('./adapters/crateDbAdapter');
 const logger = require('../../utils/logger');
 
-class DBFactory {
-    constructor() {
-        this.instance = null;
-    }
+// Singleton instance container (could be enhanced)
+let dbInstance = null;
 
-    async getDB() {
-        if (this.instance) {
-            return this.instance;
+class DbFactory {
+    static async getDB() {
+        if (dbInstance) {
+            return dbInstance;
         }
 
-        // We can also have lock logic here if needed, but for now single instance is fine
-        const dbType = config.db.type;
-
+        const dbType = process.env.DB_TYPE || config.db?.type || 'couchbase';
         logger.info(`Initializing database adapter for type: ${dbType}`);
 
-        switch (dbType) {
+        switch (dbType.toLowerCase()) {
             case 'couchbase':
-                this.instance = new CouchbaseAdapter(config.db);
+                dbInstance = new CouchbaseAdapter(config);
                 break;
-
-            // Future adapters can be added here
-            // case 'cratedb':
-            //   this.instance = new CrateDBAdapter(config.db);
-            //   break;
-
+            case 'cratedb':
+            case 'postgres':
+                dbInstance = new CrateDbAdapter(config);
+                break;
             default:
                 throw new Error(`Unsupported database type: ${dbType}`);
         }
 
-        // Auto-connect?
-        // Depending on usage, we might want to connect explicitly
-        await this.instance.connect();
-
-        return this.instance;
+        await dbInstance.connect();
+        return dbInstance;
     }
 }
 
-module.exports = new DBFactory();
+module.exports = DbFactory;

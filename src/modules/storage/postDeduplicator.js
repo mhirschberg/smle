@@ -1,7 +1,18 @@
-const couchbaseClient = require('./couchbaseClient');
+const dbFactory = require('./dbFactory');
 const logger = require('../../utils/logger');
 
 class PostDeduplicator {
+  constructor() {
+    this.db = null;
+  }
+
+  async getDB() {
+    if (!this.db) {
+      this.db = await dbFactory.getDB();
+    }
+    return this.db;
+  }
+
   /**
    * Check if a post already exists and return it
    * @param {string} platformUrl - Unique URL of the post
@@ -10,34 +21,58 @@ class PostDeduplicator {
    */
   async findExistingPost(platformUrl, collection) {
     try {
-      const query = `
-        SELECT META().id as docId, p.*
-        FROM SMLE._default.${collection} p
-        WHERE p.platform_url = $platformUrl
-        LIMIT 1
-      `;
-      
-      const results = await couchbaseClient.query(query, {
-        parameters: { platformUrl }
+      const db = await this.getDB();
+      const config = require('../../config');
+      const dbType = (process.env.DB_TYPE || config.db.type).toLowerCase();
+
+      let query;
+      let params;
+
+      if (dbType === 'postgres' || dbType === 'cratedb') {
+        query = `
+          SELECT id as docId, doc
+          FROM ${collection}
+          WHERE doc->>'platform_url' = $1
+          LIMIT 1
+        `;
+        params = [platformUrl];
+      } else {
+        query = `
+          SELECT META().id as docId, p.*
+          FROM SMLE._default.${collection} p
+          WHERE p.platform_url = $platformUrl
+          LIMIT 1
+        `;
+        params = { platformUrl };
+      }
+
+      const results = await db.query(query, {
+        parameters: params
       });
-      
+
       if (results.length > 0) {
+        if (dbType === 'postgres' || dbType === 'cratedb') {
+          return {
+            docId: results[0].docid || results[0].docId,
+            post: results[0].doc
+          };
+        }
         return {
           docId: results[0].docId,
           post: results[0].p || results[0]
         };
       }
-      
+
       return null;
     } catch (error) {
-      logger.error('Failed to check for existing post', { 
-        platformUrl, 
-        error: error.message 
+      logger.error('Failed to check for existing post', {
+        platformUrl,
+        error: error.message
       });
       return null;
     }
   }
-  
+
   /**
    * Update existing post with new engagement data
    * @param {string} docId - Document ID
@@ -50,21 +85,21 @@ class PostDeduplicator {
   async updateExistingPost(docId, existingPost, newRawData, runNumber, runId, collection) {
     try {
       const now = new Date().toISOString();
-      
+
       // Initialize tracking fields if they don't exist
       if (!existingPost.first_seen_run) {
         existingPost.first_seen_run = existingPost.run_id ? 1 : runNumber;
       }
-      
+
       existingPost.last_seen_run = runNumber;
       existingPost.total_appearances = (existingPost.total_appearances || 1) + 1;
       existingPost.updated_at = now;
-      
+
       // Add to engagement history
       if (!existingPost.engagement_history) {
         existingPost.engagement_history = [];
       }
-      
+
       const newEngagement = newRawData.engagement || {};
       existingPost.engagement_history.push({
         run_number: runNumber,
@@ -75,33 +110,34 @@ class PostDeduplicator {
         shares: newEngagement.shares || newEngagement.reposts || 0,
         views: newEngagement.views || newEngagement.play_count || 0
       });
-      
+
       // Update current engagement to latest
       existingPost.raw_data.engagement = newEngagement;
-      
+
       // Keep latest scraped data
       existingPost.scraped_at = newRawData.timestamp || now;
-      
+
       // Update the document
-      await couchbaseClient.upsert(collection, docId, existingPost);
-      
-      logger.debug('Post updated with new engagement data', { 
-        docId, 
+      const db = await this.getDB();
+      await db.upsert(collection, docId, existingPost);
+
+      logger.debug('Post updated with new engagement data', {
+        docId,
         runNumber,
-        appearances: existingPost.total_appearances 
+        appearances: existingPost.total_appearances
       });
-      
+
       return { updated: true, docId };
-      
+
     } catch (error) {
-      logger.error('Failed to update existing post', { 
-        docId, 
-        error: error.message 
+      logger.error('Failed to update existing post', {
+        docId,
+        error: error.message
       });
       throw error;
     }
   }
-  
+
   /**
    * Create new post document with tracking fields
    */
@@ -116,13 +152,13 @@ class PostDeduplicator {
       created_at: timestamp,
       scraped_at: rawPost.timestamp || timestamp,
       analysis_status: 'pending',
-      
+
       // Deduplication tracking
       first_seen_run: runNumber,
       last_seen_run: runNumber,
       total_appearances: 1,
       engagement_history: [],
-      
+
       analysis: {
         sentiment_score: null,
         sentiment_label: null,
@@ -136,7 +172,7 @@ class PostDeduplicator {
         error: null
       }
     };
-    
+
     return baseDocument;
   }
 }

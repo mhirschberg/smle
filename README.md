@@ -66,7 +66,18 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 
 - **Node.js**: v18+
 - **Couchbase Server**: Local or Cloud instance (Bucket: `SMLE`)
+- **Docker**: Optional, for running databases easily.
 - **BrightData Account**: For SERP and scraping capabilities.
+
+## Quick Start (Docker)
+
+To start Postgres (with pgvector support) using Docker:
+
+```bash
+docker-compose up -d
+```
+
+> **Note**: Couchbase is no longer included in the Docker configuration. If you need Couchbase, please install it separately or use a cloud instance.
 
 ## Installation
 

@@ -93,28 +93,59 @@ class SemanticSearch {
   async fallbackSearch(db, collection, campaignId, queryEmbedding, sentiment, limit) {
     logger.info('Using cosine similarity search', { collection });
 
-    let whereClause = `p.campaign_id = $campaignId AND p.analysis_status = 'analyzed' AND p.analysis.embedding IS NOT NULL`;
+    const dbType = (process.env.DB_TYPE || require('../../config').db.type).toLowerCase();
+    let query;
+    let parameters;
 
-    if (sentiment === 'positive') {
-      whereClause += ' AND p.analysis.sentiment_score >= 8';
-    } else if (sentiment === 'neutral') {
-      whereClause += ' AND p.analysis.sentiment_score >= 4 AND p.analysis.sentiment_score < 8';
-    } else if (sentiment === 'negative') {
-      whereClause += ' AND p.analysis.sentiment_score < 4';
+    if (dbType === 'postgres' || dbType === 'cratedb') {
+      let whereClause = `doc->>'campaign_id' = $1 AND doc->>'analysis_status' = 'analyzed' AND doc->'analysis'->>'embedding' IS NOT NULL`;
+
+      if (sentiment === 'positive') {
+        whereClause += " AND (doc->'analysis'->>'sentiment_score')::float >= 8";
+      } else if (sentiment === 'neutral') {
+        whereClause += " AND (doc->'analysis'->>'sentiment_score')::float >= 4 AND (doc->'analysis'->>'sentiment_score')::float < 8";
+      } else if (sentiment === 'negative') {
+        whereClause += " AND (doc->'analysis'->>'sentiment_score')::float < 4";
+      }
+
+      query = `
+        SELECT id, doc
+        FROM ${collection}
+        WHERE ${whereClause}
+        LIMIT 500
+      `;
+      parameters = [campaignId];
+    } else {
+      // Couchbase N1QL
+      let whereClause = `p.campaign_id = $campaignId AND p.analysis_status = 'analyzed' AND p.analysis.embedding IS NOT MISSING AND p.analysis.embedding IS NOT NULL`;
+
+      if (sentiment === 'positive') {
+        whereClause += ' AND p.analysis.sentiment_score >= 8';
+      } else if (sentiment === 'neutral') {
+        whereClause += ' AND p.analysis.sentiment_score >= 4 AND p.analysis.sentiment_score < 8';
+      } else if (sentiment === 'negative') {
+        whereClause += ' AND p.analysis.sentiment_score < 4';
+      }
+
+      query = `
+        SELECT META().id as id, p.*
+        FROM SMLE._default.${collection} p
+        WHERE ${whereClause}
+        LIMIT 500
+      `;
+      parameters = { campaignId };
     }
 
-    const query = `
-      SELECT META().id as id, p.*
-      FROM SMLE._default.${collection} p
-      WHERE ${whereClause}
-      LIMIT 500
-    `;
-
     const results = await db.query(query, {
-      parameters: { campaignId }
+      parameters: parameters
     });
 
-    const posts = results.map(r => ({ id: r.id, ...(r.p || r) }));
+    const posts = results.map(r => {
+      if (dbType === 'postgres' || dbType === 'cratedb') {
+        return { id: r.id, ...r.doc };
+      }
+      return { id: r.id, ...(r.p || r) };
+    });
 
     logger.info(`Found ${posts.length} posts with embeddings in ${collection}`);
 

@@ -1,36 +1,44 @@
-const couchbaseClient = require('../modules/storage/couchbaseClient');
+const campaignRepository = require('../modules/repositories/campaignRepository');
+const dbFactory = require('../modules/storage/dbFactory');
 const platformManager = require('../modules/platforms/platformManager');
 const logger = require('../utils/logger');
+const config = require('../config');
 
 async function reanalyzeCampaign(campaignId) {
   try {
     logger.info('=== Re-analyzing Campaign ===', { campaignId });
-    
-    await couchbaseClient.connect();
-    
-    // Get campaign
-    const campaign = await couchbaseClient.get('searches', campaignId);
+
+    // Use repository to get campaign
+    const campaign = await campaignRepository.getById(campaignId);
     if (!campaign) {
       throw new Error(`Campaign not found: ${campaignId}`);
     }
-    
+
     const platforms = campaign.platforms || [campaign.platform];
-    
+    const db = await dbFactory.getDB();
+    const dbType = config.db.type.toLowerCase();
+
     logger.info('Campaign loaded', {
       query: campaign.search_query,
       platforms: platforms
     });
-    
+
     // Reset all posts to pending for re-analysis
     let totalReset = 0;
-    
+
     for (const platform of platforms) {
       const collection = platformManager.getCollection(platform);
-      
-      const updateQuery = `
-        UPDATE SMLE._default.${collection}
-        SET analysis_status = 'pending',
-            analysis = {
+      let query;
+      let params = { campaignId };
+
+      if (dbType === 'postgres' || dbType === 'cratedb') {
+        // SQL Migration logic
+        query = `
+          UPDATE ${collection}
+          SET doc = jsonb_set(
+            jsonb_set(doc, '{analysis_status}', '"pending"'),
+            '{analysis}',
+            '{
               "sentiment_score": null,
               "sentiment_label": null,
               "key_topics": [],
@@ -41,61 +49,70 @@ async function reanalyzeCampaign(campaignId) {
               "analyzed_at": null,
               "llm_model": null,
               "error": null
-            }
-        WHERE campaign_id = $campaignId
-        AND analysis_status = 'analyzed'
-        RETURNING META().id
-      `;
-      
+            }'::jsonb
+          )
+          WHERE doc->>'campaign_id' = $1
+          AND doc->>'analysis_status' = 'analyzed'
+          RETURNING id
+        `;
+        params = [campaignId];
+      } else {
+        query = `
+          UPDATE SMLE._default.${collection}
+          SET analysis_status = 'pending',
+              analysis = {
+                "sentiment_score": null,
+                "sentiment_label": null,
+                "key_topics": [],
+                "brand_mentioned": null,
+                "summary": null,
+                "language": null,
+                "embedding": null,
+                "analyzed_at": null,
+                "llm_model": null,
+                "error": null
+              }
+          WHERE campaign_id = $campaignId
+          AND analysis_status = 'analyzed'
+          RETURNING META().id
+        `;
+      }
+
       try {
-        const results = await couchbaseClient.query(updateQuery, {
-          parameters: { campaignId }
-        });
-        
+        const results = await db.query(query, { parameters: params });
         logger.info(`Reset ${results.length} posts in ${collection}`);
         totalReset += results.length;
       } catch (err) {
         logger.error(`Failed to reset ${collection}`, { error: err.message });
       }
     }
-    
+
     logger.info(`Total posts reset: ${totalReset}`);
-    
+
     if (totalReset === 0) {
       logger.warn('No posts found to re-analyze');
       return;
     }
-    
-    // Now trigger analysis for each run
-    const runsQuery = `
-      SELECT r.*
-      FROM SMLE._default.search_runs r
-      WHERE r.campaign_id = $campaignId
-      ORDER BY r.run_number ASC
-    `;
-    
-    const runs = await couchbaseClient.query(runsQuery, {
-      parameters: { campaignId }
-    });
-    
+
+    // Now trigger analysis for each run using repository
+    const runs = await campaignRepository.getRuns(campaignId, 1000);
+
     logger.info(`Found ${runs.length} runs to re-analyze`);
-    
+
     console.log(`\n✅ Reset ${totalReset} posts to pending status`);
     console.log(`📊 Found ${runs.length} run(s) in this campaign\n`);
     console.log('To analyze them, run:\n');
-    
-    runs.forEach((r, idx) => {
-      const run = r.r || r;
+
+    runs.forEach((run, idx) => {
       console.log(`  Run #${run.run_number}:`);
       console.log(`    npm run analyze-posts ${campaignId} ${run.id}\n`);
     });
-    
+
     console.log('Or analyze all runs sequentially:\n');
-    
-    for (const r of runs) {
-      const run = r.r || r;
+
+    for (const run of runs) {
       logger.info(`Analyzing Run #${run.run_number}...`);
-      
+
       const { execSync } = require('child_process');
       try {
         execSync(`npm run analyze-posts ${campaignId} ${run.id}`, {
@@ -107,14 +124,14 @@ async function reanalyzeCampaign(campaignId) {
         logger.error(`❌ Run #${run.run_number} failed`, { error: error.message });
       }
     }
-    
+
     logger.info('=== Re-analysis Complete ===');
-    
+
   } catch (error) {
     logger.error('Re-analysis failed', { error: error.message, stack: error.stack });
     throw error;
   } finally {
-    await couchbaseClient.disconnect();
+    // No explicit disconnect needed since factory handles it
   }
 }
 

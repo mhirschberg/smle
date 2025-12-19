@@ -78,11 +78,15 @@ class SearchController {
 
       // Get run count
       const runCount = await campaignRepository.getRunningCount(id);
-      const totalPosts = await postRepository.getTotalPostCount(id);
+
+      // CRITICAL: Return ANALYZED count, as requested by user ("Total posts is actually Total posts analyzed")
+      const platforms = campaign.platforms || [campaign.platform];
+      const allResults = await analyticsRepository.getAggregatedStats(id, platforms);
+      const totalAnalyzed = allResults.reduce((sum, res) => sum + (res.total_posts || 0), 0);
 
       campaign.total_runs = runCount || 0;
-      campaign.total_posts = totalPosts || 0;
-      campaign.posts_count = totalPosts || 0;
+      campaign.total_posts = totalAnalyzed || 0;
+      campaign.posts_count = totalAnalyzed || 0;
 
       res.json({ search: campaign });
     } catch (error) {
@@ -187,22 +191,33 @@ class SearchController {
         total_comments: 0,
         positive_count: 0,
         neutral_count: 0,
-        negative_count: 0
+        negative_count: 0,
+        by_platform: {} // Add breakdown for frontend
       };
 
       let totalSentimentSum = 0;
       let platformsWithData = 0;
 
-      allResults.forEach(stats => {
-        aggregatedStats.total_posts += stats.total_posts || 0;
-        aggregatedStats.total_likes += stats.total_likes || 0;
-        aggregatedStats.total_comments += stats.total_comments || 0;
-        aggregatedStats.positive_count += stats.positive_count || 0;
-        aggregatedStats.neutral_count += stats.neutral_count || 0;
-        aggregatedStats.negative_count += stats.negative_count || 0;
+      allResults.forEach((stats, index) => {
+        const platform = platforms[index];
+
+        aggregatedStats.total_posts += Number(stats.total_posts || 0);
+        aggregatedStats.total_likes += Number(stats.total_likes || 0);
+        aggregatedStats.total_comments += Number(stats.total_comments || 0);
+        aggregatedStats.positive_count += Number(stats.positive_count || 0);
+        aggregatedStats.neutral_count += Number(stats.neutral_count || 0);
+        aggregatedStats.negative_count += Number(stats.negative_count || 0);
+
+        // Store platform-specific stats
+        aggregatedStats.by_platform[platform] = {
+          total_posts: Number(stats.total_posts || 0),
+          avg_sentiment: stats.avg_sentiment ? parseFloat(stats.avg_sentiment) : 0,
+          total_likes: Number(stats.total_likes || 0),
+          total_comments: Number(stats.total_comments || 0)
+        };
 
         if (stats.avg_sentiment) {
-          totalSentimentSum += stats.avg_sentiment;
+          totalSentimentSum += parseFloat(stats.avg_sentiment);
           platformsWithData++;
         }
       });
@@ -276,12 +291,14 @@ class SearchController {
         scheduled = false,
         interval_minutes = 10,
         duration_days = 7,
-        tiktok_post_limit = 100,
-        reddit_post_limit = 100,
-        youtube_post_limit = 100,
+        limit = 100, // Generic limit fallback
+        tiktok_post_limit = null,
+        reddit_post_limit = null,
+        youtube_post_limit = null,
         reddit_use_dual_search = true,
         enable_relevance_filter = false,
-        relevance_threshold = 0.7
+        relevance_threshold = 0.7,
+        description = '' // Optional description
 
       } = req.body;
 
@@ -320,6 +337,7 @@ class SearchController {
         type: 'campaign',
         platforms: platforms,
         search_query: search_query,
+        description: description,
         keywords: search_query.split(' '),
         google_domain: google_domain,
         created_at: now,
@@ -327,9 +345,10 @@ class SearchController {
         status: 'active',
         scheduled_config: scheduledConfig,
         settings: {
-          tiktok_post_limit: parseInt(tiktok_post_limit),
-          reddit_post_limit: parseInt(reddit_post_limit),
-          youtube_post_limit: parseInt(youtube_post_limit),
+          tiktok_post_limit: parseInt(tiktok_post_limit || limit),
+          reddit_post_limit: parseInt(reddit_post_limit || limit),
+          youtube_post_limit: parseInt(youtube_post_limit || limit),
+          generic_post_limit: parseInt(limit), // Save for SERP/scraping scripts
           reddit_use_dual_search: Boolean(reddit_use_dual_search),
           enable_relevance_filter: Boolean(enable_relevance_filter),
           relevance_threshold: parseFloat(relevance_threshold)
