@@ -29,6 +29,9 @@ router.post('/:id/run', (req, res) => searchController.triggerManualRun(req, res
 // Pause/Resume campaign
 router.patch('/:id/status', (req, res) => searchController.toggleCampaignStatus(req, res));
 
+// Resume an interrupted run
+router.post('/runs/:runId/resume', (req, res) => searchController.resumeRun(req, res));
+
 // Delete campaign
 router.delete('/:id', (req, res) => searchController.deleteCampaign(req, res));
 
@@ -37,15 +40,31 @@ router.delete('/', (req, res) => searchController.deleteAllCampaigns(req, res));
 
 // Debug: Get single post
 router.get('/debug/post/:postId', async (req, res) => {
-  const couchbaseClient = require('../../modules/storage/couchbaseClient');
+  const postRepository = require('../../modules/repositories/postRepository');
+  const platformManager = require('../../modules/platforms/platformManager');
+
   try {
-    await couchbaseClient.connect();
-    const post = await couchbaseClient.get('instagram_posts', req.params.postId);
-    res.json({ post });
+    const { postId } = req.params;
+    const platforms = platformManager.getSupportedPlatforms();
+
+    // Attempt to find the post in any of the platform collections
+    // In a real debug scenario, you might want to know the platform, but for a general "get by ID" search:
+    let foundPost = null;
+
+    for (const platform of platforms) {
+      const db = await postRepository.getDB();
+      const collection = platformManager.getCollection(platform);
+      foundPost = await db.get(collection, postId);
+      if (foundPost) break;
+    }
+
+    if (!foundPost) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    res.json({ post: foundPost });
   } catch (error) {
     res.status(500).json({ error: error.message });
-  } finally {
-    await couchbaseClient.disconnect();
   }
 });
 

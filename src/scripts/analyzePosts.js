@@ -6,6 +6,16 @@ const embeddingGenerator = require('../modules/analysis/embeddingGenerator');
 const logger = require('../utils/logger');
 const dbFactory = require('../modules/storage/dbFactory');
 
+// Global error handlers to capture background crashes
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection at:', { promise, reason: reason?.message || reason });
+});
+
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception:', { error: error.message, stack: error.stack });
+  process.exit(1);
+});
+
 async function analyzePosts(campaignId, runId) {
   let db;
   try {
@@ -26,24 +36,9 @@ async function analyzePosts(campaignId, runId) {
 
     logger.info('Step 2: Finding posts to analyze from all platforms...', { platforms });
 
-    // Step 3: Build UNION query for all platforms
-    // Direct DB query is used here for the complex UNION
-    const unionQueries = platforms.map(platform => {
-      const collection = platformManager.getCollection(platform);
-      return `
-        SELECT META().id as docId, p.*, '${collection}' as source_collection
-        FROM SMLE._default.${collection} p
-        WHERE p.campaign_id = $campaignId
-        AND p.run_id = $runId
-        AND p.analysis_status = 'pending'
-      `;
-    });
-
-    const query = unionQueries.join(' UNION ALL ');
-
-    const results = await db.query(query, {
-      parameters: { campaignId, runId }
-    });
+    // Step 3: Fetch pending posts using repository (Query Orchestration)
+    // We fetch ALL pending posts for the campaign to bridge gaps from previous failed runs
+    const results = await postRepository.getPostsByStatus(campaignId, null, platforms, 'pending');
 
     logger.info(`Found ${results.length} posts to analyze across all platforms`);
 
@@ -54,8 +49,11 @@ async function analyzePosts(campaignId, runId) {
 
     // Log breakdown by platform
     const breakdown = {};
+    const dbType = db.config?.db?.type?.toLowerCase() || 'couchbase';
+
     results.forEach(r => {
-      const platform = r.p?.platform || r.platform;
+      const post = (dbType === 'postgres' || dbType === 'cratedb') ? r.doc : r;
+      const platform = post?.platform || 'unknown';
       breakdown[platform] = (breakdown[platform] || 0) + 1;
     });
     logger.info('Posts by platform', breakdown);
@@ -63,7 +61,7 @@ async function analyzePosts(campaignId, runId) {
     // Step 4: Analyze posts in parallel with concurrency control
     logger.info('Step 4: Analyzing posts with LLM (parallel mode with embeddings)...');
 
-    const CONCURRENCY = 20;  // High concurrency
+    const CONCURRENCY = 5;  // Reduced from 20 to avoid overwhelming local Ollama instance
     const now = new Date().toISOString();
 
     let successCount = 0;
@@ -90,14 +88,16 @@ async function analyzePosts(campaignId, runId) {
 
       // Count successes and failures
       batchResults.forEach((result, idx) => {
-        const platform = batch[idx].p?.platform || batch[idx].platform;
+        const row = batch[idx];
+        const post = (dbType === 'postgres' || dbType === 'cratedb') ? row.doc : row;
+        const platform = post?.platform || 'unknown';
 
         if (result.status === 'fulfilled' && result.value.success) {
           successCount++;
-          statsByPlatform[platform].analyzed++;
+          if (statsByPlatform[platform]) statsByPlatform[platform].analyzed++;
         } else {
           failCount++;
-          statsByPlatform[platform].failed++;
+          if (statsByPlatform[platform]) statsByPlatform[platform].failed++;
         }
       });
 
@@ -105,6 +105,17 @@ async function analyzePosts(campaignId, runId) {
         batchSuccess: batchResults.filter(r => r.status === 'fulfilled' && r.value.success).length,
         batchFailed: batchResults.filter(r => r.status === 'rejected' || !r.value?.success).length
       });
+
+      // Update run timestamp to prevent it from being marked as "stuck"
+      try {
+        const run = await campaignRepository.getRun(runId);
+        if (run) {
+          run.updated_at = new Date().toISOString();
+          await campaignRepository.updateRun(runId, run);
+        }
+      } catch (updateErr) {
+        logger.warn('Failed to update intermediate run status', { error: updateErr.message });
+      }
     }
 
     logger.info('=== Analysis Completed ===', {
@@ -123,6 +134,7 @@ async function analyzePosts(campaignId, runId) {
       avgSentiments[platform] = await calculateAvgSentiment(db, campaignId, runId, platform);
     }
 
+    // CRITICAL: Reload run to avoid overwriting late-arriving scraper stats
     const run = await campaignRepository.getRun(runId);
     if (run) {
       run.stats.posts_analyzed = successCount;
@@ -148,7 +160,14 @@ async function analyzePosts(campaignId, runId) {
         run.stats.by_platform[platform].avg_sentiment = avgSentiments[platform];
       });
 
+      const now = new Date().toISOString();
       run.updated_at = now;
+
+      // Safety net: Mark as completed if we're done here. 
+      // Orchestrator or subsequent analytics script will update this further.
+      run.status = 'completed';
+      run.completed_at = now;
+
       await campaignRepository.updateRun(runId, run);
     }
 
@@ -181,9 +200,27 @@ async function analyzePosts(campaignId, runId) {
  * Analyze a single post (WITH EMBEDDINGS)
  */
 async function analyzePost(db, row, timestamp) {
-  const postId = row.docId;
+  const config = require('../config');
+  const dbType = (process.env.DB_TYPE || config.db.type).toLowerCase();
+
+  // Postgres results from pg come back with lowercase column names unless quoted.
+  // Our query uses 'SELECT id as docid', so it will be row.docid.
+  const postId = dbType === 'postgres' || dbType === 'cratedb' ? (row.docid || row.docId) : row.docId;
   const collection = row.source_collection;
-  const { docId, source_collection, ...post } = row;
+
+  // Extract post document based on DB type
+  let post;
+  if (dbType === 'postgres' || dbType === 'cratedb') {
+    post = row.doc;
+  } else {
+    const { docId, source_collection, ...extractedPost } = row;
+    post = extractedPost;
+  }
+
+  if (!postId) {
+    logger.error('No postId found in row for analysis', { row, dbType });
+    return { success: false, error: 'No postId found' };
+  }
 
   try {
     logger.debug(`Analyzing post`, {
@@ -252,17 +289,37 @@ async function analyzePost(db, row, timestamp) {
 async function calculateAvgSentiment(db, campaignId, runId, platform) {
   try {
     const collection = platformManager.getCollection(platform);
+    const dbType = require('../config').db.type.toLowerCase();
+    let query;
+    let params;
 
-    const query = `
-      SELECT AVG(p.analysis.sentiment_score) as avg_sentiment
-      FROM SMLE._default.${collection} p
-      WHERE p.campaign_id = $campaignId
-      AND p.run_id = $runId
-      AND p.analysis.sentiment_score IS NOT NULL
-    `;
+    const collectionPath = db.getCollectionPath(collection);
+    if (dbType === 'postgres' || dbType === 'cratedb') {
+      const sentimentPath = db.getPropertyPath('doc', 'analysis', 'sentiment_score');
+      const campaignIdPath = db.getPropertyPath('doc', 'campaign_id');
+      const runIdPath = db.getPropertyPath('doc', 'run_id');
+
+      query = `
+        SELECT AVG((${sentimentPath})::float) as avg_sentiment
+        FROM ${collectionPath} p
+        WHERE ${campaignIdPath} = $1
+        AND ${runIdPath} = $2
+        AND ${sentimentPath} IS NOT NULL
+      `;
+      params = [campaignId, runId];
+    } else {
+      query = `
+        SELECT AVG(p.analysis.sentiment_score) as avg_sentiment
+        FROM ${collectionPath} p
+        WHERE p.campaign_id = $campaignId
+        AND p.run_id = $runId
+        AND p.analysis.sentiment_score IS NOT NULL
+      `;
+      params = { campaignId, runId };
+    }
 
     const result = await db.query(query, {
-      parameters: { campaignId, runId }
+      parameters: params
     });
 
     if (result.length > 0 && result[0].avg_sentiment) {

@@ -1,14 +1,24 @@
-const couchbaseClient = require('../modules/storage/couchbaseClient');
+const dbFactory = require('../modules/storage/dbFactory');
 const logger = require('../utils/logger');
 
 async function createIndexes() {
+  let db;
   try {
+    const config = require('../config');
+    const dbType = (process.env.DB_TYPE || config.db.type).toLowerCase();
+
+    if (dbType === 'postgres' || dbType === 'cratedb') {
+      logger.info('=== Skipping Couchbase Index Creation (Postgres/CrateDB detected) ===');
+      logger.info('Please use node src/scripts/setupPostgres.js to manage SQL indexes.');
+      return;
+    }
+
     logger.info('=== Creating Couchbase Indexes for All Platforms ===');
-    
-    await couchbaseClient.connect();
-    
+
+    db = await dbFactory.getDB();
+
     const platforms = ['instagram', 'tiktok', 'twitter', 'reddit', 'facebook', 'youtube', 'linkedin'];
-    
+
     const indexes = [
       // Searches collection indexes
       {
@@ -35,7 +45,7 @@ async function createIndexes() {
           ON SMLE._default.searches(type, status, created_at DESC)
         `
       },
-      
+
       // Search runs indexes
       {
         name: 'idx_runs_campaign',
@@ -62,11 +72,11 @@ async function createIndexes() {
         `
       }
     ];
-    
+
     // Create indexes for each platform collection
     platforms.forEach(platform => {
       const collection = `${platform}_posts`;
-      
+
       // Campaign and run index
       indexes.push({
         name: `idx_${collection}_campaign_run`,
@@ -76,7 +86,7 @@ async function createIndexes() {
           ON SMLE._default.${collection}(campaign_id, run_id, created_at DESC)
         `
       });
-      
+
       // Analysis status index
       indexes.push({
         name: `idx_${collection}_analysis_status`,
@@ -86,7 +96,7 @@ async function createIndexes() {
           ON SMLE._default.${collection}(campaign_id, analysis_status, created_at DESC)
         `
       });
-      
+
       // Sentiment score index
       indexes.push({
         name: `idx_${collection}_sentiment`,
@@ -96,7 +106,7 @@ async function createIndexes() {
           ON SMLE._default.${collection}(campaign_id, analysis.sentiment_score DESC, created_at DESC)
         `
       });
-      
+
       // Platform URL index (for deduplication)
       indexes.push({
         name: `idx_${collection}_url_dedup`,
@@ -106,7 +116,7 @@ async function createIndexes() {
           ON SMLE._default.${collection}(platform_url)
         `
       });
-      
+
       // Appearances tracking index
       indexes.push({
         name: `idx_${collection}_appearances`,
@@ -116,7 +126,7 @@ async function createIndexes() {
           ON SMLE._default.${collection}(total_appearances DESC, last_seen_run DESC)
         `
       });
-      
+
       // Date posted index
       indexes.push({
         name: `idx_${collection}_date`,
@@ -127,7 +137,7 @@ async function createIndexes() {
         `
       });
     });
-    
+
     // Analytics indexes
     indexes.push({
       name: 'idx_analytics_campaign',
@@ -137,7 +147,7 @@ async function createIndexes() {
         ON SMLE._default.analytics(campaign_id, type, created_at DESC)
       `
     });
-    
+
     indexes.push({
       name: 'idx_analytics_platforms',
       collection: 'analytics',
@@ -146,17 +156,17 @@ async function createIndexes() {
         ON SMLE._default.analytics(platforms, type, created_at DESC)
       `
     });
-    
+
     let created = 0;
     let skipped = 0;
     let failed = 0;
-    
+
     logger.info(`Creating ${indexes.length} indexes...`);
-    
+
     for (const index of indexes) {
       try {
         logger.info(`Creating index: ${index.name}...`);
-        await couchbaseClient.query(index.query);
+        await db.query(index.query);
         logger.info(`✅ Created: ${index.name}`);
         created++;
       } catch (error) {
@@ -169,25 +179,25 @@ async function createIndexes() {
         }
       }
     }
-    
+
     logger.info('=== Index Creation Complete ===', {
       created,
       skipped,
       failed,
       total: indexes.length
     });
-    
+
     console.log(`\n📊 Index Creation Summary:`);
     console.log(`  ✅ Created: ${created}`);
     console.log(`  ⚠️  Skipped (already exist): ${skipped}`);
     console.log(`  ❌ Failed: ${failed}`);
     console.log(`  📝 Total: ${indexes.length}\n`);
-    
+
   } catch (error) {
     logger.error('Failed to create indexes', { error: error.message, stack: error.stack });
     throw error;
   } finally {
-    await couchbaseClient.disconnect();
+    if (db) await db.disconnect();
   }
 }
 

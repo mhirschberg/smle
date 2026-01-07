@@ -14,7 +14,8 @@ const SearchForm = ({ onSubmit, loading }) => {
     youtube_post_limit: 100,
     reddit_use_dual_search: true,
     enable_relevance_filter: false,
-    relevance_threshold: 0.7
+    relevance_threshold: 0.7,
+    description: ''
   });
 
   const platforms = [
@@ -91,6 +92,23 @@ const SearchForm = ({ onSubmit, loading }) => {
         </p>
       </div>
 
+      {/* Description */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          Campaign Description (Optional)
+        </label>
+        <textarea
+          value={formData.description}
+          onChange={(e) => handleChange('description', e.target.value)}
+          placeholder="Add context or notes about this campaign..."
+          rows="3"
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          This will be displayed on the campaign card to help you identify it
+        </p>
+      </div>
+
       {/* Platform Multi-Selection */}
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -118,7 +136,7 @@ const SearchForm = ({ onSubmit, loading }) => {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {platforms.map(platform => {
             const isSelected = formData.platforms.includes(platform.id);
-            
+
             return (
               <button
                 key={platform.id}
@@ -139,10 +157,10 @@ const SearchForm = ({ onSubmit, loading }) => {
                     <CheckCircle className="w-5 h-5 text-blue-600" fill="currentColor" />
                   </div>
                 )}
-                
+
                 <div className="text-3xl mb-2">{platform.icon}</div>
                 <div className="text-sm font-medium text-gray-800">{platform.name}</div>
-                
+
                 {!platform.available && (
                   <div className="absolute top-2 left-2">
                     <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">
@@ -189,7 +207,7 @@ const SearchForm = ({ onSubmit, loading }) => {
               Advanced Settings
             </h3>
           </div>
-          
+
           {/* Post Limits */}
           {(formData.platforms.includes('tiktok') || formData.platforms.includes('reddit') || formData.platforms.includes('youtube')) && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -208,7 +226,7 @@ const SearchForm = ({ onSubmit, loading }) => {
                   />
                 </div>
               )}
-              
+
               {formData.platforms.includes('reddit') && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -224,7 +242,7 @@ const SearchForm = ({ onSubmit, loading }) => {
                   />
                 </div>
               )}
-              
+
               {formData.platforms.includes('youtube') && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -242,7 +260,7 @@ const SearchForm = ({ onSubmit, loading }) => {
               )}
             </div>
           )}
-          
+
           {/* Reddit Dual Search Toggle */}
           {formData.platforms.includes('reddit') && (
             <div className="mb-4 p-4 bg-orange-50 rounded-lg border border-orange-200">
@@ -273,7 +291,7 @@ const SearchForm = ({ onSubmit, loading }) => {
               </div>
             </div>
           )}
-          
+
           {/* Relevance Filter */}
           <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
             <div className="flex items-center justify-between mb-3">
@@ -301,7 +319,7 @@ const SearchForm = ({ onSubmit, loading }) => {
                 />
               </button>
             </div>
-            
+
             {formData.enable_relevance_filter && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -329,7 +347,7 @@ const SearchForm = ({ onSubmit, loading }) => {
               </div>
             )}
           </div>
-          
+
           <p className="mt-3 text-xs text-gray-500 italic">
             💡 Lower limits = faster execution. Higher limits = more comprehensive data.
           </p>

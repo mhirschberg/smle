@@ -1,16 +1,25 @@
-const couchbaseClient = require('../modules/storage/couchbaseClient');
+const dbFactory = require('../modules/storage/dbFactory');
 const logger = require('../utils/logger');
 
 async function createDeduplicationIndexes() {
+  let db;
   try {
+    const config = require('../config');
+    const dbType = (process.env.DB_TYPE || config.db.type).toLowerCase();
+
+    if (dbType === 'postgres' || dbType === 'cratedb') {
+      logger.info('=== Skipping Deduplication Index Creation (Postgres/CrateDB detected) ===');
+      return;
+    }
+
     logger.info('=== Creating Deduplication Indexes ===');
-    
-    await couchbaseClient.connect();
-    
+
+    db = await dbFactory.getDB();
+
     const platforms = ['instagram_posts', 'tiktok_posts', 'twitter_posts', 'reddit_posts', 'facebook_posts'];
-    
+
     const indexes = [];
-    
+
     // Create platform_url index for each collection (for deduplication)
     platforms.forEach(collection => {
       indexes.push({
@@ -21,7 +30,7 @@ async function createDeduplicationIndexes() {
           ON SMLE._default.${collection}(platform_url)
         `
       });
-      
+
       // Index for tracking appearances
       indexes.push({
         name: `idx_${collection}_appearances`,
@@ -32,15 +41,15 @@ async function createDeduplicationIndexes() {
         `
       });
     });
-    
+
     let created = 0;
     let skipped = 0;
     let failed = 0;
-    
+
     for (const index of indexes) {
       try {
         logger.info(`Creating index: ${index.name}...`);
-        await couchbaseClient.query(index.query);
+        await db.query(index.query);
         logger.info(`✅ Created: ${index.name}`);
         created++;
       } catch (error) {
@@ -53,19 +62,19 @@ async function createDeduplicationIndexes() {
         }
       }
     }
-    
+
     logger.info('=== Deduplication Index Creation Complete ===', {
       created,
       skipped,
       failed,
       total: indexes.length
     });
-    
+
   } catch (error) {
     logger.error('Failed to create indexes', { error: error.message });
     throw error;
   } finally {
-    await couchbaseClient.disconnect();
+    if (db) await db.disconnect();
   }
 }
 

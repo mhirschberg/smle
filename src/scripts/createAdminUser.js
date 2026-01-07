@@ -4,8 +4,13 @@ const logger = require('../utils/logger');
 
 async function createAdmin() {
     try {
-        const username = 'root';
-        const password = 'Sobaka!123';
+        const username = process.env.ADMIN_USERNAME || 'root';
+        const password = process.env.ADMIN_PASSWORD;
+
+        if (!password) {
+            logger.error('ADMIN_PASSWORD environment variable is not set');
+            process.exit(1);
+        }
 
         logger.info('Creating admin user...');
 

@@ -1,42 +1,40 @@
 const config = require('../../config');
-const CouchbaseAdapter = require('./adapters/couchbaseAdapter');
 const logger = require('../../utils/logger');
 
-class DBFactory {
-    constructor() {
-        this.instance = null;
-    }
+// Singleton instance container
+let dbInstance = null;
 
-    async getDB() {
-        if (this.instance) {
-            return this.instance;
+class DbFactory {
+    static async getDB() {
+        if (dbInstance) {
+            return dbInstance;
         }
 
-        // We can also have lock logic here if needed, but for now single instance is fine
-        const dbType = config.db.type;
-
+        const dbType = process.env.DB_TYPE || config.db?.type || 'couchbase';
         logger.info(`Initializing database adapter for type: ${dbType}`);
 
-        switch (dbType) {
-            case 'couchbase':
-                this.instance = new CouchbaseAdapter(config.db);
-                break;
+        try {
+            switch (dbType.toLowerCase()) {
+                case 'couchbase':
+                    const CouchbaseAdapter = require('./adapters/couchbaseAdapter');
+                    dbInstance = new CouchbaseAdapter(config);
+                    break;
+                case 'cratedb':
+                case 'postgres':
+                    const CrateDbAdapter = require('./adapters/crateDbAdapter');
+                    dbInstance = new CrateDbAdapter(config);
+                    break;
+                default:
+                    throw new Error(`Unsupported database type: ${dbType}`);
+            }
 
-            // Future adapters can be added here
-            // case 'cratedb':
-            //   this.instance = new CrateDBAdapter(config.db);
-            //   break;
-
-            default:
-                throw new Error(`Unsupported database type: ${dbType}`);
+            await dbInstance.connect();
+            return dbInstance;
+        } catch (error) {
+            logger.error(`Failed to initialize database adapter: ${error.message}`);
+            throw error;
         }
-
-        // Auto-connect?
-        // Depending on usage, we might want to connect explicitly
-        await this.instance.connect();
-
-        return this.instance;
     }
 }
 
-module.exports = new DBFactory();
+module.exports = DbFactory;

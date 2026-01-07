@@ -88,35 +88,19 @@ class SemanticSearch {
   }
 
   /**
-   * Fallback to in-memory cosine similarity search
+   * Fetch posts with embeddings using orchestrated database method
    */
   async fallbackSearch(db, collection, campaignId, queryEmbedding, sentiment, limit) {
-    logger.info('Using cosine similarity search', { collection });
+    const platformCollections = Array.isArray(collection) ? collection : [collection];
+    const results = await db.getPostsWithEmbeddings(campaignId, platformCollections, sentiment);
 
-    let whereClause = `p.campaign_id = $campaignId AND p.analysis_status = 'analyzed' AND p.analysis.embedding IS NOT NULL`;
+    const posts = results.map(r => ({
+      id: r.id || r.docId,
+      ...r,
+      ...(r.doc ? r.doc : {}) // Flatten for CrateDB if needed
+    }));
 
-    if (sentiment === 'positive') {
-      whereClause += ' AND p.analysis.sentiment_score >= 8';
-    } else if (sentiment === 'neutral') {
-      whereClause += ' AND p.analysis.sentiment_score >= 4 AND p.analysis.sentiment_score < 8';
-    } else if (sentiment === 'negative') {
-      whereClause += ' AND p.analysis.sentiment_score < 4';
-    }
-
-    const query = `
-      SELECT META().id as id, p.*
-      FROM SMLE._default.${collection} p
-      WHERE ${whereClause}
-      LIMIT 500
-    `;
-
-    const results = await db.query(query, {
-      parameters: { campaignId }
-    });
-
-    const posts = results.map(r => ({ id: r.id, ...(r.p || r) }));
-
-    logger.info(`Found ${posts.length} posts with embeddings in ${collection}`);
+    logger.info(`Found ${posts.length} posts with embeddings for semantic search`);
 
     if (posts.length === 0) {
       return [];
@@ -124,16 +108,20 @@ class SemanticSearch {
 
     // Calculate similarity scores
     const postsWithScores = posts.map(post => {
-      const similarity = this.cosineSimilarity(queryEmbedding, post.analysis.embedding);
+      // Ensure embedding exists
+      const embedding = post.analysis?.embedding;
+      if (!embedding) return null;
+
+      const similarity = this.cosineSimilarity(queryEmbedding, embedding);
       return {
         ...post,
         similarity_score: similarity
       };
-    });
+    }).filter(p => p !== null);
 
     // Log score distribution
     const scores = postsWithScores.map(p => p.similarity_score).sort((a, b) => b - a);
-    logger.info(`${collection} similarity scores`, {
+    logger.info(`Similarity scores distribution`, {
       highest: scores[0]?.toFixed(3),
       median: scores[Math.floor(scores.length / 2)]?.toFixed(3),
       lowest: scores[scores.length - 1]?.toFixed(3),

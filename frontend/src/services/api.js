@@ -14,20 +14,21 @@ export const searchApi = {
   create: (data) => api.post('/searches', data),
   delete: (id) => api.delete(`/searches/${id}`),
   deleteAll: () => api.delete('/searches'),
-  
+
   // Runs
   getRuns: (campaignId, params = {}) => api.get(`/searches/${campaignId}/runs`, { params }),
   triggerRun: (campaignId) => api.post(`/searches/${campaignId}/run`),
-  
+  resumeRun: (runId) => api.post(`/searches/runs/${runId}/resume`),
+
   // Posts with filters (updated to support platform filter)
   getPosts: (campaignId, params = {}) => api.get(`/searches/${campaignId}/posts`, { params }),
-  
+
   // Stats
   getStats: (campaignId) => api.get(`/searches/${campaignId}/stats`),
-  
+
   // Trend
   getTrend: (campaignId) => api.get(`/searches/${campaignId}/trend`),
-  
+
   // Status
   toggleStatus: (campaignId, status) => api.patch(`/searches/${campaignId}/status`, { status }),
 };
@@ -35,6 +36,10 @@ export const searchApi = {
 export const analyticsApi = {
   getBySearchId: (searchId) => api.get(`/analytics/search/${searchId}`),
   getAll: () => api.get('/analytics'),
+};
+
+export const configApi = {
+  getConfig: () => api.get('/config')
 };
 
 export default api;
