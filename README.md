@@ -10,6 +10,49 @@ Here’s a look at how we architected the solution and the tech stack that power
 
 ## The Architecture: A Unified Pipeline
 
+```mermaid
+graph TD
+    User((User/Dashboard)) <--> API[API Server Express]
+    
+    subgraph Orchestration [Orchestrator]
+        API --> Pipeline[Run Pipeline]
+        Pipeline --> S1[Search Discovery]
+        Pipeline --> S2[Scraping Engine]
+        Pipeline --> S3[Analysis Engine]
+        Pipeline --> S4[Analytics Engine]
+    end
+
+    subgraph External [External Services]
+        S1 -- SERP/Direct --> BD[Bright Data]
+        S2 -- Fetch Results --> BD
+        BD -- raw data --> S2
+    end
+
+    subgraph AIPipeline [AI & Semantic Layer]
+        S3 --> LLM[LLM Provider: Ollama/Gemini]
+        LLM -- Sentiment/Topics --> S3
+        S3 --> Vector[Embedding Provider]
+        Vector -- nomic-embed-text --> S3
+    end
+
+    subgraph Storage [Database Layer]
+        S1 --> DB
+        S2 --> DB[(Unified Storage)]
+        S3 --> DB
+        S4 --> DB
+        
+        DBAdapter[Database Adapter] --> CBC[Couchbase Capella]
+        DBAdapter --> CDB[CrateDB Cloud]
+        DBAdapter --> PG[PostgreSQL + pgvector]
+    end
+
+    User -- Semantic Query --> API
+    API --> Vector
+    Vector -- query vector --> DB
+    DB -- Vector Similarity Search --> User
+```
+
+
 The core philosophy behind SMLE is **"One Campaign, Any Platform."**
 
 Instead of building seven distinct tools, we built a modular pipeline. When you initiate a search for "Generative AI," the engine spins up parallel processes. Whether the data comes from a TikTok viral video or a LinkedIn thought leadership article, it flows through the same normalization and analysis funnel.
@@ -74,7 +117,7 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 
 1.  **Clone the repository**
     ```bash
-    git clone <repository_url>
+    git clone https://github.com/mhirschberg/smle
     cd smle
     ```
 
@@ -104,39 +147,39 @@ docker-compose up -d
 ## Configuration
 
 ### Environment Variables
-    Copy the example file:
-    ```bash
-    cp .env.example .env
-    ```
+Copy the example file:
+```bash
+cp .env.example .env
+```
     
-    Update `.env` with your:
-    - Database connection string and credentials
-    - BrightData API Key
-    - JWT Secret
-    - `ADMIN_USERNAME` and `ADMIN_PASSWORD` (Your initial login credentials)
+Update `.env` with your:
+- Database connection string and credentials
+- BrightData API Key
+- JWT Secret
+- `ADMIN_USERNAME` and `ADMIN_PASSWORD` (Your initial login credentials)
 
 > [!TIP]
 > You can point to a specific environment file (e.g., for switching between local and cloud DBs) by using:  
 > `DOTENV_CONFIG_PATH=.env.cb npm run setup:auth`
 
 ## Database Initialization
-    **For Couchbase:**
-    ```bash
-    npm run setup:couchbase
-    ```
+**For Couchbase:**
+```bash
+npm run setup:couchbase
+```
 
-    **For CrateDB:**
-    ```bash
-    npm run setup:cratedb
-    ```
-    **For Postgres:**
-    ```bash
-    npm run setup:postgres
-    ```
+**For CrateDB:**
+```bash
+npm run setup:cratedb
+```
+**For Postgres:**
+```bash
+npm run setup:postgres
+```
     
-    This will:
-    - Create the necessary database structure and indexes.
-    - Create a default application user.
+This will:
+- Create the necessary database structure and indexes.
+- Create a default application user.
 
 ### Optional local LLM setup
 Install [ollama](https://ollama.com/download) and run it locally:
@@ -171,7 +214,7 @@ Access the dashboard at `http://localhost:5173`
 2.  **Create a Campaign**: Enter keywords and select platforms.
 3.  **View Results**: The dashboard will update as data is fetched and analyzed.
 
-## Architecture
+## Tech Stack
 
 - **Backend**: Node.js/Express with a Repository Pattern.
 - **Database**: Couchbase, CrateDB or Postgres.
