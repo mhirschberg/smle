@@ -36,19 +36,20 @@ class UserRepository {
 
         // Dialect switching
         if (dbType === 'postgres' || dbType === 'cratedb') {
-            const table = dbType === 'postgres' ? 'users' : 'doc.users';
+            const collectionPath = db.getCollectionPath('users');
             // Use JSONB operator for Postgres / Object mapping for Crate
             if (dbType === 'postgres') {
-                query = `SELECT doc FROM ${table} WHERE doc->>'username' = $1 LIMIT 1`;
+                query = `SELECT doc FROM ${collectionPath} WHERE doc->>'username' = $1 LIMIT 1`;
             } else {
-                query = `SELECT doc FROM ${table} WHERE doc['username'] = $1 LIMIT 1`;
+                query = `SELECT doc FROM ${collectionPath} WHERE doc['username'] = $1 LIMIT 1`;
             }
             params = [username];
         } else {
             // N1QL for Couchbase
+            const collectionPath = db.getCollectionPath('users');
             query = `
                 SELECT u.*
-                FROM SMLE._default.users u
+                FROM ${collectionPath} u
                 WHERE u.type = 'user' AND u.username = $username
                 LIMIT 1
             `;

@@ -34,6 +34,26 @@ const SearchDetail = () => {
     return () => clearInterval(interval);
   }, [id, sentimentFilter, selectedRun, platformFilter]);
 
+  useEffect(() => {
+    const handleResume = async (event) => {
+      const { runId } = event.detail;
+      try {
+        setTriggering(true);
+        await searchApi.resumeRun(runId);
+        alert('Analysis resumed! The page will refresh as it progresses.');
+        setTimeout(loadData, 2000);
+      } catch (error) {
+        console.error('Failed to resume run:', error);
+        alert('Failed to resume analysis');
+      } finally {
+        setTriggering(false);
+      }
+    };
+
+    window.addEventListener('resume-run', handleResume);
+    return () => window.removeEventListener('resume-run', handleResume);
+  }, []);
+
   const loadData = async () => {
     try {
       // Don't show loading on auto-refresh
@@ -219,10 +239,15 @@ const SearchDetail = () => {
               </div>
             </div>
             <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4">
-              <div className="text-sm text-purple-600 mb-1">Total Posts</div>
+              <div className="text-sm text-purple-600 mb-1">Unique Posts</div>
               <div className="text-3xl font-bold text-purple-700">
                 {stats?.total_posts || 0}
               </div>
+              {stats?.analyzed_posts < stats?.total_posts && (
+                <div className="text-xs text-purple-500 mt-1">
+                  Analyzed: {stats.analyzed_posts}
+                </div>
+              )}
             </div>
             <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4">
               <div className="text-sm text-green-600 mb-1">Avg Sentiment</div>
@@ -259,8 +284,8 @@ const SearchDetail = () => {
           <button
             onClick={() => setActiveTab('search')}
             className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'search'
-                ? 'text-purple-600 border-b-2 border-purple-600'
-                : 'text-gray-600 hover:text-gray-800'
+              ? 'text-purple-600 border-b-2 border-purple-600'
+              : 'text-gray-600 hover:text-gray-800'
               }`}
           >
             <Search className="w-4 h-4" />
@@ -269,8 +294,8 @@ const SearchDetail = () => {
           <button
             onClick={() => setActiveTab('overview')}
             className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'overview'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-600 hover:text-gray-800'
+              ? 'text-blue-600 border-b-2 border-blue-600'
+              : 'text-gray-600 hover:text-gray-800'
               }`}
           >
             <BarChart3 className="w-4 h-4" />
@@ -280,8 +305,8 @@ const SearchDetail = () => {
             <button
               onClick={() => setActiveTab('platforms')}
               className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'platforms'
-                  ? 'text-blue-600 border-b-2 border-blue-600'
-                  : 'text-gray-600 hover:text-gray-800'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-600 hover:text-gray-800'
                 }`}
             >
               <Layers className="w-4 h-4" />
@@ -291,8 +316,8 @@ const SearchDetail = () => {
           <button
             onClick={() => setActiveTab('runs')}
             className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'runs'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-600 hover:text-gray-800'
+              ? 'text-blue-600 border-b-2 border-blue-600'
+              : 'text-gray-600 hover:text-gray-800'
               }`}
           >
             <History className="w-4 h-4" />
@@ -301,8 +326,8 @@ const SearchDetail = () => {
           <button
             onClick={() => setActiveTab('posts')}
             className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'posts'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-600 hover:text-gray-800'
+              ? 'text-blue-600 border-b-2 border-blue-600'
+              : 'text-gray-600 hover:text-gray-800'
               }`}
           >
             <MessageCircle className="w-4 h-4" />
@@ -345,9 +370,21 @@ const SearchDetail = () => {
           {/* Sentiment Distribution */}
           {stats && (
             <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-              <h3 className="text-xl font-semibold text-gray-800 mb-4">
-                Overall Sentiment Distribution
-              </h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-xl font-semibold text-gray-800">
+                  Overall Sentiment Distribution
+                </h3>
+                {stats && stats.analyzed_posts < stats.total_posts && (
+                  <div className="text-sm bg-blue-50 text-blue-700 px-3 py-1 rounded-full font-medium border border-blue-100">
+                    Analysis in progress: {stats.analyzed_posts} / {stats.total_posts}
+                  </div>
+                )}
+                {stats && stats.analyzed_posts >= stats.total_posts && stats.total_posts > 0 && (
+                  <div className="text-sm bg-green-50 text-green-700 px-3 py-1 rounded-full font-medium border border-green-100">
+                    All {stats.total_posts} posts analyzed
+                  </div>
+                )}
+              </div>
               <SentimentDistributionChart
                 data={{
                   counts: {
@@ -408,7 +445,7 @@ const SearchDetail = () => {
                         <div>
                           <h4 className="font-semibold text-gray-800 capitalize">{platform}</h4>
                           <p className="text-sm text-gray-600">
-                            {platformStats.posts_analyzed || 0} posts analyzed
+                            {platformStats.analyzed_posts || 0} / {platformStats.total_posts || 0} posts analyzed
                           </p>
                         </div>
                       </div>
@@ -537,8 +574,8 @@ const SearchDetail = () => {
                 <button
                   onClick={() => setPlatformFilter('all')}
                   className={`px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === 'all'
-                      ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
-                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                    ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
+                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
                     }`}
                 >
                   All Platforms
@@ -548,8 +585,8 @@ const SearchDetail = () => {
                     key={platform}
                     onClick={() => setPlatformFilter(platform)}
                     className={`flex items-center space-x-2 px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === platform
-                        ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
-                        : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
                       }`}
                   >
                     <span className="text-lg">{getPlatformIcon(platform)}</span>

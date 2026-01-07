@@ -17,7 +17,13 @@ class SearchController {
         logger.error('Background cleanup failed', { error: err.message });
       });
 
-      const results = await campaignRepository.getAll();
+      const results = await campaignRepository.getAll().catch(err => {
+        if (err.message.includes('not exist') || err.message.includes('not found')) {
+          logger.warn('Searches table not found, returning empty array');
+          return [];
+        }
+        throw err;
+      });
 
       logger.info('Raw query results', { count: results.length });
 
@@ -31,7 +37,7 @@ class SearchController {
         let totalPosts = 0;
 
         try {
-          totalRuns = await campaignRepository.getRunningCount(campaignId);
+          totalRuns = await campaignRepository.getTotalRunCount(campaignId);
 
           if (totalRuns > 0) {
             latestRun = await campaignRepository.getLatestRun(campaignId);
@@ -59,8 +65,9 @@ class SearchController {
 
       res.json({ searches: campaigns });
     } catch (error) {
-      logger.error('Failed to get campaigns', { error: error.message, stack: error.stack });
-      res.status(500).json({ error: error.message });
+      logger.error('Failed to get campaigns', { error: error.message });
+      // On uninitialized DB, return empty list instead of error
+      res.json({ searches: [], error: error.message, uninitialized: true });
     }
   }
 
@@ -76,17 +83,27 @@ class SearchController {
         return res.status(404).json({ error: 'Campaign not found' });
       }
 
-      // Get run count
-      const runCount = await campaignRepository.getRunningCount(id);
+      // Get run count and stats with resilience
+      try {
+        const runCount = await campaignRepository.getTotalRunCount(id);
+        campaign.total_runs = runCount || 0;
 
-      // CRITICAL: Return ANALYZED count, as requested by user ("Total posts is actually Total posts analyzed")
-      const platforms = campaign.platforms || [campaign.platform];
-      const allResults = await analyticsRepository.getAggregatedStats(id, platforms);
-      const totalAnalyzed = allResults.reduce((sum, res) => sum + (res.total_posts || 0), 0);
+        // CRITICAL: Return ANALYZED count
+        const platforms = campaign.platforms || [campaign.platform];
+        const allResults = await analyticsRepository.getAggregatedStats(id, platforms);
+        const totalScraped = allResults.reduce((sum, res) => sum + (res.total_posts || 0), 0);
+        const totalAnalyzed = allResults.reduce((sum, res) => sum + (res.analyzed_posts || 0), 0);
 
-      campaign.total_runs = runCount || 0;
-      campaign.total_posts = totalAnalyzed || 0;
-      campaign.posts_count = totalAnalyzed || 0;
+        campaign.total_posts = totalScraped || 0;
+        campaign.analyzed_posts = totalAnalyzed || 0;
+        campaign.posts_count = totalScraped || 0; // Maintain for compatibility
+      } catch (err) {
+        logger.warn('Failed to fetch detailed campaign stats, returning basic info', { id, error: err.message });
+        campaign.total_runs = campaign.total_runs || 0;
+        campaign.total_posts = campaign.total_posts || 0;
+        campaign.posts_count = campaign.posts_count || 0;
+        campaign.stats_error = err.message; // Let frontend know
+      }
 
       res.json({ search: campaign });
     } catch (error) {
@@ -181,11 +198,22 @@ class SearchController {
 
       const platforms = campaign.platforms || [campaign.platform];
 
-      const allResults = await analyticsRepository.getAggregatedStats(id, platforms);
+      let allResults = [];
+      try {
+        allResults = await analyticsRepository.getAggregatedStats(id, platforms);
+      } catch (err) {
+        logger.error('Failed to aggregate stats from database', { id, error: err.message });
+        // Return empty stats instead of crashing
+        return res.json({
+          stats: { total_posts: 0, avg_sentiment: 0, by_platform: {} },
+          error: err.message
+        });
+      }
 
       // Aggregate stats from all platforms
       const aggregatedStats = {
         total_posts: 0,
+        analyzed_posts: 0,
         avg_sentiment: 0,
         total_likes: 0,
         total_comments: 0,
@@ -202,6 +230,7 @@ class SearchController {
         const platform = platforms[index];
 
         aggregatedStats.total_posts += Number(stats.total_posts || 0);
+        aggregatedStats.analyzed_posts += Number(stats.analyzed_posts || 0);
         aggregatedStats.total_likes += Number(stats.total_likes || 0);
         aggregatedStats.total_comments += Number(stats.total_comments || 0);
         aggregatedStats.positive_count += Number(stats.positive_count || 0);
@@ -211,6 +240,7 @@ class SearchController {
         // Store platform-specific stats
         aggregatedStats.by_platform[platform] = {
           total_posts: Number(stats.total_posts || 0),
+          analyzed_posts: Number(stats.analyzed_posts || 0),
           avg_sentiment: stats.avg_sentiment ? parseFloat(stats.avg_sentiment) : 0,
           total_likes: Number(stats.total_likes || 0),
           total_comments: Number(stats.total_comments || 0)
@@ -267,7 +297,7 @@ class SearchController {
         .map(r => ({
           run_number: r.run_number,
           run_at: r.run_at,
-          avg_sentiment: r.stats?.avg_sentiment,
+          avg_sentiment: r.stats?.avg_sentiment ? parseFloat(r.stats.avg_sentiment) : null,
           post_count: r.stats?.posts_analyzed
         }));
 
@@ -559,6 +589,82 @@ class SearchController {
   }
 
   /**
+   * Resume an interrupted run
+   */
+  async resumeRun(req, res) {
+    try {
+      const { runId } = req.params;
+
+      const run = await campaignRepository.getRun(runId);
+      if (!run) {
+        return res.status(404).json({ error: 'Run not found' });
+      }
+
+      const campaignId = run.campaign_id;
+
+      logger.info('Resuming run', { campaignId, runId });
+
+      // Step 1: Mark as running again
+      run.status = 'running';
+      run.updated_at = new Date().toISOString();
+      await campaignRepository.updateRun(runId, run);
+
+      // Step 2: Trigger analysis (it only processes 'pending' posts)
+      setImmediate(() => {
+        this.runAnalysisAndAnalytics(campaignId, runId).catch(err => {
+          logger.error('Resumed run failed', { runId, error: err.message });
+        });
+      });
+
+      res.json({
+        success: true,
+        message: 'Analysis resumed for run ' + runId
+      });
+
+    } catch (error) {
+      logger.error('Failed to resume run', { error: error.message });
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Helper to run only the analysis and analytics steps
+   */
+  async runAnalysisAndAnalytics(campaignId, runId) {
+    try {
+      // Step 3: Analyze all posts
+      logger.info('Resuming Step 3: Analyzing all posts...');
+      await this.runScript('analyze-posts', [campaignId, runId]);
+
+      // Step 4: Generating analytics
+      logger.info('Resuming Step 4: Generating analytics...');
+      await this.runScript('analytics', [campaignId, runId]);
+
+      // Update run status
+      const run = await campaignRepository.getRun(runId);
+      if (run) {
+        run.status = 'completed';
+        run.completed_at = new Date().toISOString();
+        await campaignRepository.updateRun(runId, run);
+      }
+    } catch (error) {
+      logger.error('Resumed pipeline failed', { campaignId, runId, error: error.message });
+      // Update run status to failed
+      try {
+        const run = await campaignRepository.getRun(runId);
+        if (run) {
+          run.status = 'failed';
+          run.error = error.message;
+          run.failed_at = new Date().toISOString();
+          await campaignRepository.updateRun(runId, run);
+        }
+      } catch (updateErr) {
+        logger.error('Failed to update run status', { runId, error: updateErr.message });
+      }
+    }
+  }
+
+  /**
    * Trigger a campaign run
    */
   async triggerCampaignRun(campaignId) {
@@ -572,8 +678,8 @@ class SearchController {
         throw new Error(`Campaign not found: ${campaignId}`);
       }
 
-      const runCount = await campaignRepository.getRunningCount(campaignId);
-      const runNumber = runCount + 1;
+      const totalRuns = await campaignRepository.getTotalRunCount(campaignId);
+      const runNumber = totalRuns + 1;
 
       const runId = uuidv4();
       const now = new Date().toISOString();
@@ -630,12 +736,18 @@ class SearchController {
         return new Promise((resolve, reject) => {
           const child = spawn('npm', ['run', script, '--', ...args], {
             cwd: projectRoot,
-            stdio: 'inherit'
+            stdio: ['inherit', 'inherit', 'pipe']
+          });
+
+          let stderr = '';
+          child.stderr.on('data', (data) => {
+            stderr += data.toString();
           });
 
           child.on('close', (code) => {
             if (code !== 0) {
-              reject(new Error(`Script ${script} exited with code ${code}`));
+              logger.error(`Script ${script} failed`, { code, stderr: stderr.substring(0, 500) });
+              reject(new Error(`Script ${script} exited with code ${code}. Error: ${stderr.substring(0, 200)}`));
             } else {
               resolve();
             }

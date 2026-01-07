@@ -31,7 +31,7 @@ We integrated **Ollama (Local)** and **Google Gemini (Cloud)** directly into the
 ### 3. Smart Deduplication & Engagement Tracking
 Social media isn't static. A post scraped today might have 10 likes; tomorrow it might have 10,000.
 
-We built a smart deduplication system on top of **Couchbase**. Instead of ignoring duplicate URLs, the system recognizes them. If a campaign runs and finds a post we’ve already seen:
+We built a smart deduplication system: instead of ignoring duplicate URLs, the system recognizes them. If a campaign runs and finds a post we’ve already seen:
 1.  It skips the heavy re-analysis (saving compute costs).
 2.  It **updates the engagement metrics** (likes, shares, comments).
 3.  It logs a history of that post’s growth.
@@ -65,19 +65,10 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 ## Prerequisites
 
 - **Node.js**: v18+
-- **Couchbase Server**: Local or Cloud instance (Bucket: `SMLE`)
-- **Docker**: Optional, for running databases easily.
+- **Database Server**: Right now we support [Couchbase](https://www.couchbase.com), [CrateDB](https://cratedb.com/) and [PostgreSQL](https://www.postgresql.org/) (with pgvector extension). Further databases can be added easily.
+- **Docker**: For running PostgreSQL locally.
 - **BrightData Account**: For SERP and scraping capabilities.
 
-## Quick Start (Docker)
-
-To start Postgres (with pgvector support) using Docker:
-
-```bash
-docker-compose up -d
-```
-
-> **Note**: Couchbase is no longer included in the Docker configuration. If you need Couchbase, please install it separately or use a cloud instance.
 
 ## Installation
 
@@ -99,33 +90,65 @@ docker-compose up -d
     cd ..
     ```
 
+## Infrastructure Start
+
+Before running the application, you must start your chosen database.  
+We recommend using a cloud instance of [Couchbase Capella](https://cloud.couchbase.com/sign-up?) or [CrateDB Cloud](https://console.cratedb.cloud/) for the easiest setup.
+
+If you prefer running **PostgreSQL** locally via Docker:
+
+```bash
+docker-compose up -d
+```
+
 ## Configuration
 
-1.  **Environment Variables**
-    Copy the example file and update it with your credentials:
+### Environment Variables
+    Copy the example file:
     ```bash
     cp .env.example .env
     ```
     
     Update `.env` with your:
-    - Couchbase credentials
+    - Database connection string and credentials
     - BrightData API Key
     - JWT Secret
+    - `ADMIN_USERNAME` and `ADMIN_PASSWORD` (Your initial login credentials)
 
-## Database Setup
+> [!TIP]
+> You can point to a specific environment file (e.g., for switching between local and cloud DBs) by using:  
+> `DOTENV_CONFIG_PATH=.env.cb npm run setup:auth`
 
-Before running the application, you must initialize the database (create collections, indexes, and admin user).
-
-1.  **Run the setup script:**
+## Database Initialization
+    **For Couchbase:**
     ```bash
-    npm run setup:auth
+    npm run setup:couchbase
+    ```
+
+    **For CrateDB:**
+    ```bash
+    npm run setup:cratedb
+    ```
+    **For Postgres:**
+    ```bash
+    npm run setup:postgres
     ```
     
     This will:
-    - Create the necessary database indexes.
-    - Create a default admin user if one doesn't exist.
+    - Create the necessary database structure and indexes.
+    - Create a default application user.
 
-## Running the Application
+### Optional local LLM setup
+Install [ollama](https://ollama.com/download) and run it locally:
+```bash
+ollama serve
+```
+
+Now pull the required models:
+```bash
+ollama pull llama3.2:1b
+ollama pull nomic-embed-text
+```
 
 ### 1. Start the Backend API
 In the root directory:
@@ -140,7 +163,7 @@ In a new terminal, navigate to `frontend`:
 cd frontend
 npm run dev
 ```
-Access the dashboard at `http://localhost:5173`.
+Access the dashboard at `http://localhost:5173`
 
 ## Usage
 
@@ -151,5 +174,6 @@ Access the dashboard at `http://localhost:5173`.
 ## Architecture
 
 - **Backend**: Node.js/Express with a Repository Pattern.
-- **Database**: Couchbase (using `_default` collection scope for compatibility).
+- **Database**: Couchbase, CrateDB or Postgres.
+- **LLM**: Ollama or Google Gemini.
 - **Frontend**: React + Vite + TailwindCSS.

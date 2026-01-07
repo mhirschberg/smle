@@ -32,7 +32,15 @@ async function searchYouTube(campaignId, runId) {
     }
 
     const searchQuery = campaign.search_query;
-    const postLimit = campaign.settings?.youtube_post_limit || 100;
+    let settings = campaign.settings || {};
+    if (typeof settings === 'string') {
+      try {
+        settings = JSON.parse(settings);
+      } catch (e) {
+        settings = {};
+      }
+    }
+    const postLimit = settings.youtube_post_limit || 100;
 
     logger.info('Campaign loaded', {
       campaignId,
@@ -98,97 +106,30 @@ async function searchYouTube(campaignId, runId) {
 
     logger.info(`Downloaded ${videos.length} YouTube videos`);
 
-    // Step 7: Store videos directly
-    logger.info('Step 7: Storing videos in database...');
+    const postRepository = require('../modules/repositories/postRepository');
+    const runNumber = run.run_number;
     const now = new Date().toISOString();
+    let newCount = 0;
+    let updatedCount = 0;
     let successCount = 0;
     let failCount = 0;
 
     for (const rawVideo of videos) {
       try {
-        const postId = uuidv4();
+        const result = await postRepository.saveScrapedPost(
+          'youtube',
+          rawVideo,
+          campaignId,
+          runId,
+          runNumber
+        );
 
-        const postDocument = {
-          id: postId,
-          campaign_id: campaignId,
-          run_id: runId,
-          platform: 'youtube',
-          platform_url: rawVideo.url,
-          post_id: rawVideo.video_id,
-          shortcode: rawVideo.shortcode || rawVideo.video_id,
-          content_type: 'video',
-          created_at: now,
-          scraped_at: rawVideo.timestamp || now,
-          analysis_status: 'pending',
-
-          raw_data: {
-            user_posted: rawVideo.youtuber,
-            youtuber_id: rawVideo.youtuber_id,
-            channel_url: rawVideo.channel_url,
-            is_verified: rawVideo.verified,
-
-            handle_name: rawVideo.handle_name,
-            avatar_img_channel: rawVideo.avatar_img_channel,
-            subscribers: rawVideo.subscribers,
-
-            title: rawVideo.title,
-            description: rawVideo.description,
-
-            hashtags: rawVideo.hashtags || [],
-            tags: rawVideo.tags || [],
-
-            date_posted: rawVideo.date_posted,
-
-            engagement: {
-              likes: rawVideo.likes || 0,
-              views: rawVideo.views || 0,
-              comments: rawVideo.num_comments || 0
-            },
-
-            media: {
-              video_url: rawVideo.video_url,
-              preview_image: rawVideo.preview_image,
-              video_length: rawVideo.video_length,
-              quality: rawVideo.quality,
-              quality_label: rawVideo.quality_label
-            },
-
-            music: rawVideo.music,
-
-            transcript: rawVideo.transcript,
-            formatted_transcript: rawVideo.formatted_transcript || [],
-            transcript_language: rawVideo.transcript_language || [],
-            transcription_language: rawVideo.transcription_language,
-
-            chapters: rawVideo.chapters || [],
-
-            related_videos: rawVideo.related_videos || [],
-            recommended_videos: rawVideo.recommended_videos || [],
-
-            is_sponsored: rawVideo.is_sponsored,
-            license: rawVideo.license,
-            is_age_restricted: rawVideo.is_age_restricted,
-
-            post_type: rawVideo.post_type
-          },
-
-          analysis: {
-            sentiment_score: null,
-            sentiment_label: null,
-            key_topics: [],
-            brand_mentioned: null,
-            summary: null,
-            language: null,
-            embedding: null,
-            analyzed_at: null,
-            llm_model: null,
-            error: null
-          }
-        };
-
-        await db.upsert('youtube_posts', postId, postDocument);
+        if (result.isNew) {
+          newCount++;
+        } else {
+          updatedCount++;
+        }
         successCount++;
-
       } catch (error) {
         logger.error('Failed to store video', {
           url: rawVideo.url,
@@ -198,7 +139,7 @@ async function searchYouTube(campaignId, runId) {
       }
     }
 
-    logger.info('Videos stored', { success: successCount, failed: failCount });
+    logger.info('Videos stored', { success: successCount, new: newCount, updated: updatedCount, failed: failCount });
 
     // Step 8: Update run with stats
     logger.info('Step 8: Updating run document...');
@@ -220,6 +161,8 @@ async function searchYouTube(campaignId, runId) {
     finalRun.stats.urls_found = (finalRun.stats.urls_found || 0) + videos.length;
     finalRun.stats.posts_scraped = (finalRun.stats.posts_scraped || 0) + successCount;
     finalRun.stats.posts_failed = (finalRun.stats.posts_failed || 0) + failCount;
+    finalRun.stats.posts_new = (finalRun.stats.posts_new || 0) + newCount;
+    finalRun.stats.posts_updated = (finalRun.stats.posts_updated || 0) + updatedCount;
     finalRun.updated_at = now;
 
     await campaignRepository.updateRun(runId, finalRun);

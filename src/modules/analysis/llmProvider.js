@@ -4,22 +4,22 @@ const logger = require('../../utils/logger');
 class LLMProvider {
   constructor() {
     this.provider = process.env.LLM_PROVIDER || 'ollama';
-    
+
     // Ollama config
     this.ollamaEndpoint = process.env.LLM_ENDPOINT || 'http://localhost:11434';
     this.ollamaModel = process.env.LLM_MODEL || 'llama3.2:1b';
-    
+
     // Gemini config
     this.geminiApiKey = process.env.GEMINI_API_KEY;
     this.geminiModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-    
+
     // OpenAI config
     this.openaiApiKey = process.env.OPENAI_API_KEY;
     this.openaiModel = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-    
+
     logger.info('LLM Provider initialized', { provider: this.provider });
   }
-  
+
   /**
    * Generate text completion
    * @param {string} prompt - The prompt
@@ -28,20 +28,20 @@ class LLMProvider {
    */
   async generate(prompt, options = {}) {
     const { temperature = 0.3, maxTokens = 500 } = options;
-    
+
     switch (this.provider) {
       case 'gemini':
         return await this.generateGemini(prompt, temperature, maxTokens);
-      
+
       case 'openai':
         return await this.generateOpenAI(prompt, temperature, maxTokens);
-      
+
       case 'ollama':
       default:
         return await this.generateOllama(prompt, temperature, maxTokens);
     }
   }
-  
+
   /**
    * Generate with Ollama (local)
    */
@@ -56,9 +56,9 @@ class LLMProvider {
           num_predict: maxTokens
         }
       }, {
-        timeout: 60000
+        timeout: 120000
       });
-      
+
       return response.data.response;
     } catch (error) {
       if (error.code === 'ECONNREFUSED') {
@@ -67,7 +67,7 @@ class LLMProvider {
       throw error;
     }
   }
-  
+
   /**
    * Generate with Google Gemini
    */
@@ -76,30 +76,39 @@ class LLMProvider {
       if (!this.geminiApiKey) {
         throw new Error('GEMINI_API_KEY not configured in .env');
       }
-      
+
       const { GoogleGenerativeAI } = require('@google/generative-ai');
       const genAI = new GoogleGenerativeAI(this.geminiApiKey);
-      
-      const model = genAI.getGenerativeModel({ 
+
+      const model = genAI.getGenerativeModel({
         model: this.geminiModel,
         generationConfig: {
           temperature: temperature,
           maxOutputTokens: maxTokens
         }
       });
-      
-      const result = await model.generateContent(prompt);
+
+      // Wrap in timeout since SDK doesn't expose one clearly
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Gemini API timeout after 60s')), 60000)
+      );
+
+      const result = await Promise.race([
+        model.generateContent(prompt),
+        timeoutPromise
+      ]);
+
       const response = await result.response;
       const text = response.text();
-      
+
       return text;
-      
+
     } catch (error) {
       logger.error('Gemini API error', { error: error.message });
       throw error;
     }
   }
-  
+
   /**
    * Generate with OpenAI
    */
@@ -108,7 +117,7 @@ class LLMProvider {
       if (!this.openaiApiKey) {
         throw new Error('OPENAI_API_KEY not configured in .env');
       }
-      
+
       const response = await axios.post(
         'https://api.openai.com/v1/chat/completions',
         {
@@ -127,9 +136,9 @@ class LLMProvider {
           timeout: 60000
         }
       );
-      
+
       return response.data.choices[0].message.content;
-      
+
     } catch (error) {
       logger.error('OpenAI API error', { error: error.message });
       throw error;

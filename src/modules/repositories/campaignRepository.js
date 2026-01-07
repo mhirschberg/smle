@@ -16,36 +16,15 @@ class CampaignRepository {
 
     async getAll(limit = 100) {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
-
-        let query;
-        let params;
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            query = `
-                SELECT doc FROM searches
-                WHERE doc->>'type' IN ('campaign', 'search_parent')
-                ORDER BY created_at DESC
-                LIMIT $1
-            `;
-            params = [limit];
-        } else {
-            query = `
-                SELECT s.*
-                FROM SMLE._default.searches s
-                WHERE s.type IN ['campaign', 'search_parent']
-                ORDER BY s.created_at DESC
-                LIMIT $limit
-            `;
-            params = { limit };
+        try {
+            return await db.findCampaigns(limit);
+        } catch (err) {
+            if (err.message.includes('not exist') || err.message.includes('not found')) {
+                logger.warn('Searches table not found, returning empty array');
+                return [];
+            }
+            throw err;
         }
-
-        const results = await db.query(query, { parameters: params });
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            return results.map(r => r.doc);
-        }
-        return results.map(r => r.s || r);
     }
 
     async getById(id) {
@@ -55,7 +34,6 @@ class CampaignRepository {
 
     async create(campaignData) {
         const db = await this.getDB();
-        // Repository pattern: use upsert which handles doc structure via adapter
         return await db.upsert('searches', campaignData.id, campaignData);
     }
 
@@ -70,95 +48,31 @@ class CampaignRepository {
 
     // Run related methods
 
-    async getRunningCount(campaignId) {
+    async getActiveRunCount(campaignId) {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
+        const runs = await db.findRuns(campaignId, { latestOnly: false });
+        return runs.filter(r => r.status === 'running').length;
+    }
 
-        let query;
-        let params;
+    async getTotalRunCount(campaignId) {
+        const db = await this.getDB();
+        const runs = await db.findRuns(campaignId, { latestOnly: false });
+        return runs.length;
+    }
 
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            query = `SELECT COUNT(*) as count FROM search_runs WHERE doc->>'campaign_id' = $1`;
-            params = [campaignId];
-        } else {
-            query = `
-                SELECT COUNT(*) as count
-                FROM SMLE._default.search_runs r
-                WHERE r.campaign_id = $campaignId
-            `;
-            params = { campaignId };
-        }
-
-        const result = await db.query(query, { parameters: params });
-        return parseInt(result[0]?.count || 0);
+    async getRunningCount(campaignId) {
+        return this.getActiveRunCount(campaignId);
     }
 
     async getLatestRun(campaignId) {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
-
-        let query;
-        let params;
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            query = `
-                SELECT doc FROM search_runs 
-                WHERE doc->>'campaign_id' = $1 
-                ORDER BY doc->>'run_at' DESC 
-                LIMIT 1
-            `;
-            params = [campaignId];
-        } else {
-            query = `
-                SELECT r.*
-                FROM SMLE._default.search_runs r
-                WHERE r.campaign_id = $campaignId
-                ORDER BY r.run_at DESC
-                LIMIT 1
-            `;
-            params = { campaignId };
-        }
-
-        const result = await db.query(query, { parameters: params });
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            return result[0]?.doc || null;
-        }
-        return result[0]?.r || result[0] || null;
+        const runs = await db.findRuns(campaignId, { latestOnly: true });
+        return runs[0] || null;
     }
 
     async getRuns(campaignId, limit = 50, offset = 0) {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
-
-        let query;
-        let params;
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            query = `
-                SELECT doc FROM search_runs 
-                WHERE doc->>'campaign_id' = $1 
-                ORDER BY doc->>'run_at' DESC 
-                LIMIT $2 OFFSET $3
-            `;
-            params = [campaignId, limit, offset];
-        } else {
-            query = `
-                SELECT r.*
-                FROM SMLE._default.search_runs r
-                WHERE r.campaign_id = $campaignId
-                ORDER BY r.run_at DESC
-                LIMIT $limit OFFSET $offset
-            `;
-            params = { campaignId, limit, offset };
-        }
-
-        const results = await db.query(query, { parameters: params });
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            return results.map(r => r.doc);
-        }
-        return results.map(r => r.r || r);
+        return await db.findRuns(campaignId, { limit, offset });
     }
 
     async getRunById(runId) {
@@ -182,89 +96,24 @@ class CampaignRepository {
 
     async deleteRunsByCampaignId(campaignId) {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
-
-        let query;
-        let params;
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            query = `DELETE FROM search_runs WHERE doc->>'campaign_id' = $1 RETURNING id`;
-            params = [campaignId];
-        } else {
-            query = `
-                DELETE FROM SMLE._default.search_runs
-                WHERE campaign_id = $campaignId
-                RETURNING META().id
-            `;
-            params = { campaignId };
-        }
-
-        return await db.query(query, { parameters: params });
+        return await db.deleteRunsByCampaignId(campaignId);
     }
 
     async deleteAllRuns() {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            return await db.query(`DELETE FROM search_runs RETURNING id`);
-        }
-
-        const query = `
-            DELETE FROM SMLE._default.search_runs
-            RETURNING META().id
-        `;
-        return await db.query(query);
+        return await db.deleteAllCollection('search_runs');
     }
 
     async deleteAllCampaigns() {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            return await db.query(`DELETE FROM searches RETURNING id`);
-        }
-
-        const query = `
-            DELETE FROM SMLE._default.searches
-            RETURNING META().id
-        `;
-        return await db.query(query);
+        return await db.deleteAllCollection('searches');
     }
 
     async cleanupStuckRuns(cutoffMinutes = 60) {
         const db = await this.getDB();
-        const dbType = require('../../config').db.type.toLowerCase();
         const cutoffTime = new Date(Date.now() - cutoffMinutes * 60 * 1000).toISOString();
 
-        let query;
-        let params;
-
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            query = `
-                SELECT doc FROM search_runs 
-                WHERE doc->>'status' = 'running' 
-                AND doc->>'run_at' < $1
-            `;
-            params = [cutoffTime];
-        } else {
-            query = `
-                SELECT META().id as id, r.*
-                FROM SMLE._default.search_runs r
-                WHERE r.status = 'running'
-                AND r.run_at < $cutoffTime
-            `;
-            params = { cutoffTime };
-        }
-
-        const result = await db.query(query, { parameters: params });
-
-        let stuckRuns;
-        if (dbType === 'postgres' || dbType === 'cratedb') {
-            stuckRuns = result.map(r => r.doc);
-        } else {
-            stuckRuns = result.map(r => r.r || r);
-        }
+        const stuckRuns = await db.findStuckRuns(cutoffTime);
 
         if (stuckRuns.length > 0) {
             logger.warn(`Found ${stuckRuns.length} stuck runs. Marking as failed.`);

@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: process.env.DOTENV_CONFIG_PATH });
 
 const config = {
   db: {
@@ -15,9 +15,10 @@ const config = {
       password: process.env.CRATE_PASSWORD || ''
     },
     postgres: {
-      connectionString: process.env.POSTGRES_CONNECTION_STRING || 'postgres://postgres:postgres@localhost:5432/smle',
-      username: process.env.POSTGRES_USERNAME || 'postgres',
-      password: process.env.POSTGRES_PASSWORD || 'postgres'
+      connectionString: process.env.POSTGRES_CONNECTION_STRING || `postgres://${process.env.POSTGRES_USER || 'postgres'}:${process.env.POSTGRES_PASSWORD || 'postgres'}@localhost:5432/${process.env.POSTGRES_DB || 'smle'}`,
+      username: process.env.POSTGRES_USER || 'postgres',
+      password: process.env.POSTGRES_PASSWORD || 'postgres',
+      database: process.env.POSTGRES_DB || 'smle'
     }
   },
 

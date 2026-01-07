@@ -11,19 +11,40 @@ async function fixStuckRuns() {
         // (Adjust timeframe as needed) // 15 minutes ago
         const cutoffTime = new Date(Date.now() - 15 * 60 * 1000).toISOString();
 
-        // N1QL query to find stuck runs
-        // Note: This relies on the updated_at field being updated during the process.
-        // If updated_at is missing, we might need to rely on run_at.
-        const query = `
-      SELECT META().id as id, r.*
-      FROM SMLE._default.search_runs r
-      WHERE r.status = 'running'
-      AND (r.updated_at < $cutoffTime OR r.updated_at IS MISSING)
-      AND r.run_at < $cutoffTime
-    `;
+        // Determine scope and query based on DB type
+        const config = require('../config');
+        const dbType = (process.env.DB_TYPE || config.db.type).toLowerCase();
+        let query;
+        let params;
+
+        if (dbType === 'postgres' || dbType === 'cratedb') {
+            const table = db.getCollectionPath('search_runs');
+            const statusPath = db.getPropertyPath('doc', 'status');
+            const updatedAtPath = db.getPropertyPath('doc', 'updated_at');
+            const runAtPath = db.getPropertyPath('doc', 'run_at');
+
+            query = `
+                SELECT id as id, doc
+                FROM ${table}
+                WHERE ${statusPath} = $1
+                AND (${updatedAtPath} < $2 OR ${updatedAtPath} IS NULL)
+                AND ${runAtPath} < $2
+            `;
+            params = ['running', cutoffTime];
+        } else {
+            // N1QL query to find stuck runs
+            query = `
+                SELECT META().id as id, r.*
+                FROM SMLE._default.search_runs r
+                WHERE r.status = 'running'
+                AND (r.updated_at < $cutoffTime OR r.updated_at IS MISSING)
+                AND r.run_at < $cutoffTime
+            `;
+            params = { cutoffTime };
+        }
 
         const stuckRuns = await db.query(query, {
-            parameters: { cutoffTime }
+            parameters: params
         });
 
         logger.info(`Found ${stuckRuns.length} potentially stuck runs`);

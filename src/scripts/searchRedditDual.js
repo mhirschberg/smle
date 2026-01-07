@@ -5,6 +5,7 @@ const redditScraper = require('../modules/scraper/redditScraper');
 const serpFetcher = require('../modules/serp/serpFetcher');
 const urlExtractor = require('../modules/serp/urlExtractor');
 const snapshotMonitor = require('../modules/scraper/snapshotMonitor');
+const relevanceFilter = require('../modules/analysis/relevanceFilter');
 const logger = require('../utils/logger');
 
 async function searchRedditDual(campaignId, runId) {
@@ -29,7 +30,17 @@ async function searchRedditDual(campaignId, runId) {
 
     const searchQuery = campaign.search_query;
     const googleDomain = campaign.google_domain || 'google.com';
-    const postLimit = campaign.settings?.reddit_post_limit || campaign.settings?.generic_post_limit || 100;
+    let settings = campaign.settings || {};
+    if (typeof settings === 'string') {
+      try {
+        settings = JSON.parse(settings);
+      } catch (e) {
+        settings = {};
+      }
+    }
+    const postLimit = settings.reddit_post_limit || settings.generic_post_limit || 100;
+    const enableRelevanceFilter = settings.enable_relevance_filter || false;
+    const relevanceThreshold = settings.relevance_threshold || 0.7;
 
     logger.info('Starting dual search', {
       query: searchQuery,
@@ -134,82 +145,68 @@ async function searchRedditDual(campaignId, runId) {
       }
     });
 
-    // Store keyword posts directly (they're already scraped)
-    logger.info('Storing keyword posts directly...');
-
+    const postRepository = require('../modules/repositories/postRepository');
     const now = new Date().toISOString();
+    let keywordNew = 0;
+    let keywordUpdated = 0;
     let keywordStored = 0;
+    const runNumber = finalRun.run_number;
     const keywordUrls = new Set();
+    let filteredCount = 0;
 
     for (const rawPost of keywordPosts) {
       try {
+        if (enableRelevanceFilter) {
+          const relevanceCheck = await relevanceFilter.checkRelevance(
+            rawPost,
+            searchQuery,
+            relevanceThreshold
+          );
+
+          if (!relevanceCheck.isRelevant) {
+            logger.info('Post filtered out by relevance', {
+              url: rawPost.url,
+              score: relevanceCheck.score,
+              reason: relevanceCheck.reason
+            });
+            filteredCount++;
+            continue;
+          }
+        }
+
         keywordUrls.add(rawPost.url);
 
-        const postId = uuidv4();
-        const postDocument = {
-          id: postId,
-          campaign_id: campaignId,
-          run_id: runId,
-          platform: 'reddit',
-          platform_url: rawPost.url,
-          post_id: rawPost.post_id,
-          content_type: 'post',
-          created_at: now,
-          scraped_at: rawPost.timestamp || now,
-          analysis_status: 'pending',
-          source: 'keyword_search',
+        const result = await postRepository.saveScrapedPost(
+          'reddit',
+          rawPost,
+          campaignId,
+          runId,
+          runNumber
+        );
 
-          raw_data: {
-            user_posted: rawPost.user_posted,
-            title: rawPost.title,
-            description: rawPost.description,
-            description_markdown: rawPost.description_markdown,
-            community_name: rawPost.community_name,
-            community_url: rawPost.community_url,
-            community_description: rawPost.community_description,
-            community_members_num: rawPost.community_members_num,
-            subreddit_icon_image: rawPost.subreddit_icon_image,
-            date_posted: rawPost.date_posted,
-            engagement: {
-              upvotes: rawPost.num_upvotes || 0,
-              comments: rawPost.num_comments || 0,
-              post_karma: rawPost.post_karma || 0
-            },
-            media: {
-              photos: rawPost.photos || [],
-              videos: rawPost.videos || [],
-              embedded_links: rawPost.embedded_links || []
-            },
-            tag: rawPost.tag,
-            related_posts: rawPost.related_posts || [],
-            comments: rawPost.comments || [],
-            community_rank: rawPost.community_rank,
-            bio_description: rawPost.bio_description
-          },
-
-          analysis: {
-            sentiment_score: null,
-            sentiment_label: null,
-            key_topics: [],
-            brand_mentioned: null,
-            summary: null,
-            language: null,
-            embedding: null,
-            analyzed_at: null,
-            llm_model: null,
-            error: null
-          }
-        };
-
-        await db.upsert('reddit_posts', postId, postDocument);
+        if (result.isNew) {
+          keywordNew++;
+        } else {
+          keywordUpdated++;
+        }
         keywordStored++;
 
+        // Periodic heartbeat
+        if (keywordStored % 10 === 0) {
+          try {
+            const currentRun = await campaignRepository.getRun(runId);
+            if (currentRun) {
+              currentRun.updated_at = new Date().toISOString();
+              await campaignRepository.updateRun(runId, currentRun);
+            }
+          } catch (e) { }
+        }
       } catch (error) {
         logger.error('Failed to store keyword post', { url: rawPost.url, error: error.message });
       }
     }
 
-    logger.info('Keyword posts stored', { count: keywordStored });
+    logger.info('Keyword posts stored', { total: keywordStored, new: keywordNew, updated: keywordUpdated, filtered: filteredCount });
 
     // Filter SERP URLs to avoid duplicates with keyword results
     const uniqueSerpUrls = serpUrls.filter(url => !keywordUrls.has(url));
@@ -226,11 +223,15 @@ async function searchRedditDual(campaignId, runId) {
 
     // Add keyword posts to posts_scraped (since they are already scraped)
     finalRun.stats.posts_scraped = (finalRun.stats.posts_scraped || 0) + keywordStored;
+    finalRun.stats.posts_new = (finalRun.stats.posts_new || 0) + keywordNew;
+    finalRun.stats.posts_updated = (finalRun.stats.posts_updated || 0) + keywordUpdated;
 
     if (!finalRun.stats.by_platform) finalRun.stats.by_platform = {};
     finalRun.stats.by_platform.reddit = {
       serp_urls: uniqueSerpUrls.length,
-      keyword_posts: keywordStored
+      keyword_posts: keywordStored,
+      posts_new: keywordNew,
+      posts_updated: keywordUpdated
     };
 
     finalRun.dual_search_stats = {

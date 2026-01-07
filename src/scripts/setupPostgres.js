@@ -4,9 +4,12 @@ const path = require('path');
 const config = require('../config');
 
 // Override config if specific env vars are set for setup
-const connectionString = process.env.POSTGRES_CONNECTION_STRING ||
-    process.env.CRATE_CONNECTION_STRING ||
-    'postgres://postgres:postgres@localhost:5432/smle';
+const connectionString = process.env.POSTGRES_CONNECTION_STRING || process.env.CRATE_CONNECTION_STRING;
+
+if (!connectionString) {
+    console.error('ERROR: POSTGRES_CONNECTION_STRING or CRATE_CONNECTION_STRING environment variable is required.');
+    process.exit(1);
+}
 
 console.log(`Connecting to Postgres: ${connectionString}`);
 
@@ -65,24 +68,26 @@ async function setupPostgres() {
 
         // Setup Admin User
         console.log('Seeding admin user...');
-        const adminId = '7cf1fa74-f7b9-42fc-a054-774f9ee55c4a'; // Consistent ID
+        const adminId = '7cf1fa74-f7b9-42fc-a054-774f9ee55c4a';
+
+        const adminUsername = process.env.ADMIN_USERNAME;
+        const adminPassword = process.env.ADMIN_PASSWORD;
+
+        if (!adminUsername || !adminPassword) {
+            console.error('ERROR: ADMIN_USERNAME and ADMIN_PASSWORD environment variables are required.');
+            process.exit(1);
+        }
+
         const adminUser = {
             id: adminId,
             type: 'user',
-            username: 'root',
-            // Hash for 'Sobaka!123'
-            password_hash: '$2a$10$Wq/X/X...exampleHash...Placeholder', // In real run we use bcrypt
+            username: adminUsername,
             created_at: new Date().toISOString()
         };
 
-        // Actually generate real hash using the same util or library
-        // But for setup script isolation let's use the hardcoded known hash or re-import bcrypt
-        // $2a$10$L1... hash from previous run? 
-        // Let's import bcryptjs to be safe.
-
         const bcrypt = require('bcryptjs');
         const salt = await bcrypt.genSalt(10);
-        const hash = await bcrypt.hash('Sobaka!123', salt);
+        const hash = await bcrypt.hash(adminPassword, salt);
         adminUser.password_hash = hash;
 
         const upsertUser = `
@@ -92,7 +97,7 @@ async function setupPostgres() {
         `;
 
         await client.query(upsertUser, [adminId, adminUser]);
-        console.log('Admin user seeded (root / Sobaka!123).');
+        console.log(`Admin user seeded (${adminUsername}).`);
 
         /* 
          * PGVECTOR SETUP (Optional)

@@ -19,7 +19,7 @@ class PostDeduplicator {
    * @param {string} collection - Collection name
    * @returns {Promise<Object|null>} Existing post or null
    */
-  async findExistingPost(platformUrl, collection) {
+  async findExistingPost(platformUrl, collection, campaignId) {
     try {
       const db = await this.getDB();
       const config = require('../../config');
@@ -29,21 +29,25 @@ class PostDeduplicator {
       let params;
 
       if (dbType === 'postgres' || dbType === 'cratedb') {
+        const collectionPath = db.getCollectionPath(collection);
+        const urlPath = db.getPropertyPath('doc', 'platform_url');
+        const campaignIdPath = db.getPropertyPath('doc', 'campaign_id');
+
         query = `
-          SELECT id as docId, doc
-          FROM ${collection}
-          WHERE doc->>'platform_url' = $1
+          SELECT id as "docId", doc
+          FROM ${collectionPath}
+          WHERE ${urlPath} = $1 AND ${campaignIdPath} = $2
           LIMIT 1
         `;
-        params = [platformUrl];
+        params = [platformUrl, campaignId];
       } else {
         query = `
           SELECT META().id as docId, p.*
           FROM SMLE._default.${collection} p
-          WHERE p.platform_url = $platformUrl
+          WHERE p.platform_url = $platformUrl AND p.campaign_id = $campaignId
           LIMIT 1
         `;
-        params = { platformUrl };
+        params = { platformUrl, campaignId };
       }
 
       const results = await db.query(query, {
@@ -51,15 +55,19 @@ class PostDeduplicator {
       });
 
       if (results.length > 0) {
+        // Handle property naming differences across adapters
+        const row = results[0];
+        const docId = row.docid || row.docId || row.docID;
+
         if (dbType === 'postgres' || dbType === 'cratedb') {
           return {
-            docId: results[0].docid || results[0].docId,
-            post: results[0].doc
+            docId: docId,
+            post: row.doc
           };
         }
         return {
-          docId: results[0].docId,
-          post: results[0].p || results[0]
+          docId: docId,
+          post: row.p || row
         };
       }
 

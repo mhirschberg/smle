@@ -143,11 +143,22 @@ async function scrapePosts(campaignId, runId, specificPlatform = null) {
     // Step 8: Store posts with optional relevance filtering and deduplication
     logger.info('Step 8: Storing posts with filtering and deduplication...');
 
-    const postDeduplicator = require('../modules/storage/postDeduplicator');
     const relevanceFilter = require('../modules/analysis/relevanceFilter');
+    const postRepository = require('../modules/repositories/postRepository');
 
-    const enableRelevanceFilter = campaign.settings?.enable_relevance_filter || false;
-    const relevanceThreshold = campaign.settings?.relevance_threshold || 0.7;
+    // Ensure settings is an object (Postgres/CrateDB might return it as a string if double-serialized)
+    let settings = campaign.settings || {};
+    if (typeof settings === 'string') {
+      try {
+        settings = JSON.parse(settings);
+      } catch (e) {
+        logger.warn('Failed to parse campaign settings string', { error: e.message });
+        settings = {};
+      }
+    }
+
+    const enableRelevanceFilter = settings.enable_relevance_filter || false;
+    const relevanceThreshold = settings.relevance_threshold || 0.7;
 
     const now = new Date().toISOString();
     let successCount = 0;
@@ -164,7 +175,7 @@ async function scrapePosts(campaignId, runId, specificPlatform = null) {
       totalPosts: posts.length
     });
 
-    for (const rawPost of posts) {
+    for (let rawPost of posts) {
       try {
         // Optional: Relevance filtering
         if (enableRelevanceFilter) {
@@ -190,40 +201,35 @@ async function scrapePosts(campaignId, runId, specificPlatform = null) {
           });
         }
 
-        // Check if post already exists (deduplication)
-        const existing = await postDeduplicator.findExistingPost(rawPost.url, collection);
+        // SAVE POST (Centralized Deduplication)
+        const saveResult = await postRepository.saveScrapedPost(
+          platform,
+          rawPost,
+          campaignId,
+          runId,
+          runNumber
+        );
 
-        if (existing) {
-          await postDeduplicator.updateExistingPost(
-            existing.docId,
-            existing.post,
-            rawPost,
-            runNumber,
-            runId,
-            collection
-          );
-
-          updatedCount++;
-          successCount++;
-        } else {
-          const postId = uuidv4();
-          const baseDoc = postDeduplicator.createNewPost(
-            postId,
-            rawPost,
-            platform,
-            campaignId,
-            runId,
-            runNumber,
-            now
-          );
-
-          const postDocument = mapPostToPlatform(rawPost, platform, campaignId, runId, now, baseDoc);
-
-          await db.upsert(collection, postId, postDocument);
+        if (saveResult.isNew) {
           newCount++;
-          successCount++;
+        } else {
+          updatedCount++;
         }
 
+        successCount++;
+
+        // Periodic heartbeat to prevent run from being marked as stuck
+        if (successCount % 10 === 0) {
+          try {
+            const currentRun = await campaignRepository.getRun(runId);
+            if (currentRun) {
+              currentRun.updated_at = new Date().toISOString();
+              await campaignRepository.updateRun(runId, currentRun);
+            }
+          } catch (e) {
+            // Non-critical
+          }
+        }
       } catch (error) {
         logger.error('Failed to process post', {
           url: rawPost.url,
@@ -299,339 +305,7 @@ async function scrapePosts(campaignId, runId, specificPlatform = null) {
   }
 }
 
-/**
- * Map raw post data to platform-specific structure
- */
-function mapPostToPlatform(rawPost, platform, campaignId, runId, timestamp, baseDoc = null) {
-  // Ensure platform is clean
-  platform = platform.trim().toLowerCase();
-
-  // Use provided baseDoc or create default
-  const baseDocument = baseDoc || {
-    id: require('uuid').v4(),
-    campaign_id: campaignId,
-    run_id: runId,
-    platform: platform,
-    platform_url: rawPost.url,
-    post_id: rawPost.post_id || rawPost.id,
-    created_at: timestamp,
-    scraped_at: rawPost.timestamp || timestamp,
-    analysis_status: 'pending',
-    first_seen_run: 1,
-    last_seen_run: 1,
-    total_appearances: 1,
-    engagement_history: [],
-    analysis: {
-      sentiment_score: null,
-      sentiment_label: null,
-      key_topics: [],
-      brand_mentioned: null,
-      summary: null,
-      language: null,
-      embedding: null,
-      analyzed_at: null,
-      llm_model: null,
-      error: null
-    }
-  };
-
-  switch (platform) {
-    case 'instagram':
-      const contentType = rawPost.url?.includes('/reel/') ? 'reel' : 'post';
-      return {
-        ...baseDocument,
-        shortcode: rawPost.shortcode,
-        content_type: contentType,
-        raw_data: {
-          user_posted: rawPost.user_posted,
-          is_verified: rawPost.is_verified,
-          profile_image_link: rawPost.profile_image_link,
-          user_profile_url: rawPost.user_profile_url,
-          description: rawPost.description,
-          hashtags: rawPost.hashtags || [],
-          date_posted: rawPost.date_posted,
-          engagement: {
-            likes: rawPost.likes || 0,
-            views: rawPost.views || 0,
-            video_play_count: rawPost.video_play_count || 0,
-            num_comments: rawPost.num_comments || 0
-          },
-          top_comments: rawPost.top_comments || [],
-          media: {
-            thumbnail: rawPost.thumbnail,
-            video_url: rawPost.video_url,
-            audio_url: rawPost.audio_url,
-            length: rawPost.length
-          },
-          product_type: rawPost.product_type,
-          is_paid_partnership: rawPost.is_paid_partnership,
-          coauthor_producers: rawPost.coauthor_producers || [],
-          tagged_users: rawPost.tagged_users || []
-        }
-      };
-
-    case 'tiktok':
-      return {
-        ...baseDocument,
-        shortcode: rawPost.shortcode,
-        content_type: 'video',
-        raw_data: {
-          user_posted: rawPost.profile_username,
-          is_verified: rawPost.is_verified,
-          profile_image_link: rawPost.profile_avatar,
-          user_profile_url: rawPost.profile_url,
-          profile_id: rawPost.profile_id,
-          profile_followers: rawPost.profile_followers,
-          description: rawPost.description,
-          hashtags: rawPost.hashtags || [],
-          date_posted: rawPost.create_time,
-          engagement: {
-            likes: rawPost.digg_count || 0,
-            shares: rawPost.share_count || 0,
-            comments: rawPost.comment_count || 0,
-            views: rawPost.play_count || 0,
-            collects: rawPost.collect_count || 0
-          },
-          media: {
-            video_url: rawPost.video_url,
-            preview_image: rawPost.preview_image,
-            video_duration: rawPost.video_duration,
-            cdn_url: rawPost.cdn_url,
-            width: rawPost.width,
-            ratio: rawPost.ratio
-          },
-          music: rawPost.music ? {
-            id: rawPost.music.id,
-            title: rawPost.music.title || rawPost.original_sound,
-            author: rawPost.music.authorname,
-            original: rawPost.music.original,
-            cover: rawPost.music.covermedium,
-            play_url: rawPost.music.playurl
-          } : null,
-          region: rawPost.region,
-          post_type: rawPost.post_type
-        }
-      };
-
-    case 'twitter':
-      return {
-        ...baseDocument,
-        post_id: rawPost.id,
-        content_type: 'tweet',
-        raw_data: {
-          user_posted: rawPost.user_posted,
-          user_id: rawPost.user_id,
-          name: rawPost.name,
-          is_verified: rawPost.is_verified,
-          verification_type: rawPost.verification_type,
-          profile_image_link: rawPost.profile_image_link,
-          biography: rawPost.biography,
-          followers: rawPost.followers,
-          following: rawPost.following,
-          posts_count: rawPost.posts_count,
-          description: rawPost.description,
-          hashtags: rawPost.hashtags || [],
-          date_posted: rawPost.date_posted,
-          engagement: {
-            likes: rawPost.likes || 0,
-            replies: rawPost.replies || 0,
-            reposts: rawPost.reposts || 0,
-            quotes: rawPost.quotes || 0,
-            bookmarks: rawPost.bookmarks || 0,
-            views: rawPost.views || 0
-          },
-          media: {
-            photos: rawPost.photos || [],
-            videos: rawPost.videos || [],
-            external_image_urls: rawPost.external_image_urls || [],
-            external_video_urls: rawPost.external_video_urls || []
-          },
-          quoted_post: rawPost.quoted_post,
-          parent_post_details: rawPost.parent_post_details,
-          tagged_users: rawPost.tagged_users || [],
-          external_url: rawPost.external_url,
-          context_added: rawPost.context_added
-        }
-      };
-
-    case 'reddit':
-      return {
-        ...baseDocument,
-        post_id: rawPost.post_id,
-        content_type: 'post',
-        raw_data: {
-          user_posted: rawPost.user_posted,
-          title: rawPost.title,
-          description: rawPost.description,
-          description_markdown: rawPost.description_markdown,
-          community_name: rawPost.community_name,
-          community_url: rawPost.community_url,
-          community_description: rawPost.community_description,
-          community_members_num: rawPost.community_members_num,
-          subreddit_icon_image: rawPost.subreddit_icon_image,
-          date_posted: rawPost.date_posted,
-          engagement: {
-            upvotes: rawPost.num_upvotes || 0,
-            comments: rawPost.num_comments || 0,
-            post_karma: rawPost.post_karma || 0
-          },
-          media: {
-            photos: rawPost.photos || [],
-            videos: rawPost.videos || [],
-            embedded_links: rawPost.embedded_links || []
-          },
-          tag: rawPost.tag,
-          related_posts: rawPost.related_posts || [],
-          comments: rawPost.comments || [],
-          community_rank: rawPost.community_rank,
-          bio_description: rawPost.bio_description
-        }
-      };
-
-    case 'facebook':
-      return {
-        ...baseDocument,
-        post_id: rawPost.post_id,
-        shortcode: rawPost.shortcode,
-        content_type: rawPost.post_type || 'post',
-        raw_data: {
-          user_posted: rawPost.user_username_raw || rawPost.user_handle,
-          user_handle: rawPost.user_handle || rawPost.profile_handle,
-          profile_id: rawPost.profile_id,
-          user_url: rawPost.user_url,
-          page_url: rawPost.page_url,
-          is_verified: rawPost.page_is_verified,
-          page_logo: rawPost.page_logo,
-          avatar_image_url: rawPost.avatar_image_url,
-          header_image: rawPost.header_image,
-          content: rawPost.content,
-          hashtags: rawPost.hashtags || [],
-          date_posted: rawPost.date_posted,
-          engagement: {
-            likes: rawPost.likes || 0,
-            comments: rawPost.num_comments || 0,
-            shares: rawPost.num_shares || 0,
-            views: rawPost.video_view_count || rawPost.play_count || 0
-          },
-          likes_breakdown: rawPost.num_likes_type || [],
-          media: {
-            post_image: rawPost.post_image,
-            attachments: rawPost.attachments || []
-          },
-          post_external_link: rawPost.post_external_link,
-          post_external_title: rawPost.post_external_title,
-          page_likes: rawPost.page_likes,
-          page_followers: rawPost.page_followers,
-          is_sponsored: rawPost.is_sponsored,
-          sponsor_name: rawPost.sponsor_name,
-          has_handshake: rawPost.has_handshake,
-          original_post: rawPost.original_post,
-          marketplace_price: rawPost.marketplace_price,
-          delegate_page_id: rawPost.delegate_page_id
-        }
-      };
-
-    case 'youtube':
-      return {
-        ...baseDocument,
-        post_id: rawPost.video_id,
-        shortcode: rawPost.shortcode || rawPost.video_id,
-        content_type: 'video',
-        raw_data: {
-          user_posted: rawPost.youtuber,
-          youtuber_id: rawPost.youtuber_id,
-          channel_url: rawPost.channel_url,
-          is_verified: rawPost.verified,
-          handle_name: rawPost.handle_name,
-          avatar_img_channel: rawPost.avatar_img_channel,
-          subscribers: rawPost.subscribers,
-          title: rawPost.title,
-          description: rawPost.description,
-          hashtags: rawPost.hashtags || [],
-          tags: rawPost.tags || [],
-          date_posted: rawPost.date_posted,
-          engagement: {
-            likes: rawPost.likes || 0,
-            views: rawPost.views || 0,
-            comments: rawPost.num_comments || 0
-          },
-          media: {
-            video_url: rawPost.video_url,
-            preview_image: rawPost.preview_image,
-            video_length: rawPost.video_length,
-            quality: rawPost.quality,
-            quality_label: rawPost.quality_label
-          },
-          music: rawPost.music,
-          transcript: rawPost.transcript,
-          formatted_transcript: rawPost.formatted_transcript || [],
-          transcript_language: rawPost.transcript_language || [],
-          transcription_language: rawPost.transcription_language,
-          chapters: rawPost.chapters || [],
-          related_videos: rawPost.related_videos || [],
-          recommended_videos: rawPost.recommended_videos || [],
-          is_sponsored: rawPost.is_sponsored,
-          license: rawPost.license,
-          is_age_restricted: rawPost.is_age_restricted,
-          post_type: rawPost.post_type
-        }
-      };
-
-    case 'linkedin':
-      return {
-        ...baseDocument,
-        post_id: rawPost.id,
-        content_type: rawPost.post_type || 'post',
-        raw_data: {
-          user_posted: rawPost.user_id,
-          user_url: rawPost.use_url,
-          user_title: rawPost.user_title,
-          author_profile_pic: rawPost.author_profile_pic,
-          user_followers: rawPost.user_followers,
-          user_connections: rawPost.num_connections,
-          headline: rawPost.headline,
-          title: rawPost.title,
-          post_text: rawPost.post_text,
-          original_post_text: rawPost.original_post_text,
-          post_text_html: rawPost.post_text_html,
-          hashtags: rawPost.hashtags || [],
-          date_posted: rawPost.date_posted,
-          engagement: {
-            likes: rawPost.num_likes || 0,
-            comments: rawPost.num_comments || 0
-          },
-          media: {
-            images: rawPost.images || [],
-            videos: rawPost.videos || [],
-            video_thumbnail: rawPost.video_thumbnail,
-            video_duration: rawPost.video_duration,
-            document_cover_image: rawPost.document_cover_image,
-            document_page_count: rawPost.document_page_count
-          },
-          embedded_links: rawPost.embedded_links || [],
-          external_link_data: rawPost.external_link_data,
-          top_visible_comments: rawPost.top_visible_comments || [],
-          tagged_companies: rawPost.tagged_companies || [],
-          tagged_people: rawPost.tagged_people || [],
-          repost: rawPost.repost,
-          account_type: rawPost.account_type,
-          user_posts: rawPost.user_posts,
-          user_articles: rawPost.user_articles,
-          more_articles_by_user: rawPost.more_articles_by_user || [],
-          more_relevant_posts: rawPost.more_relevant_posts || []
-        }
-      };
-
-    default:
-      logger.error('Unsupported platform in mapPostToPlatform', {
-        platform,
-        platformType: typeof platform,
-        rawPlatform: JSON.stringify(platform),
-        url: rawPost.url
-      });
-      throw new Error(`Unsupported platform: ${platform}`);
-  }
-}
+// End of script
 
 
 // Get parameters from command line

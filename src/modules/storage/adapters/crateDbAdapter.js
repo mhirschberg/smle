@@ -167,7 +167,7 @@ class CrateDbAdapter extends DatabaseAdapter {
         }
     }
 
-    _getTableName(collectionName) {
+    getCollectionPath(collectionName) {
         // Map collection names to CrateDB/Postgres tables
         // Sanitize to prevent SQL injection if collectionName comes from user input (it shouldn't)
 
@@ -178,6 +178,330 @@ class CrateDbAdapter extends DatabaseAdapter {
 
         // CrateDB logic: use doc schema
         return `doc.${collectionName}`;
+    }
+
+    _getTableName(collectionName) {
+        return this.getCollectionPath(collectionName);
+    }
+
+    getPropertyPath(root, ...path) {
+        if (path.length === 0) return root;
+
+        if (this.config.db.type === 'postgres') {
+            // Postgres JSONB: root->'p1'->>'p2'
+            if (path.length === 1) {
+                return `${root}->>'${path[0]}'`;
+            }
+            const mid = path.slice(0, -1).map(p => `->'${p}'`).join('');
+            const last = `->>'${path[path.length - 1]}'`;
+            return `${root}${mid}${last}`;
+        }
+
+        // CrateDB OBJECT: root['p1']['p2']
+        return `${root}${path.map(p => `['${p}']`).join('')}`;
+    }
+
+    async getPostsByStatus(campaignId, runId, platformCollections, status) {
+        const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+        const runIdPath = this.getPropertyPath('doc', 'run_id');
+        const analysisStatusPath = this.getPropertyPath('doc', 'analysis_status');
+
+        let whereClause = `${analysisStatusPath} = $1`;
+        let params = [status];
+
+        if (campaignId && runId) {
+            whereClause += ` AND ${campaignIdPath} = $2 AND ${runIdPath} = $3`;
+            params.push(campaignId, runId);
+        } else if (campaignId) {
+            whereClause += ` AND ${campaignIdPath} = $2`;
+            params.push(campaignId);
+        }
+
+        const queryPromises = platformCollections.map(async (collection) => {
+            const collectionPath = this.getCollectionPath(collection);
+            const query = `
+                SELECT id as docid, doc, '${collection}' as source_collection
+                FROM ${collectionPath}
+                WHERE ${whereClause}
+            `;
+            try {
+                return await this.query(query, { parameters: params });
+            } catch (err) {
+                logger.warn(`Failed to fetch posts by status for ${collection}`, { error: err.message });
+                return [];
+            }
+        });
+
+        const results = await Promise.all(queryPromises);
+        return results.flat();
+    }
+
+    async getPostsMissingEmbeddings(campaignId, runId, platformCollections) {
+        const analysisStatusPath = this.getPropertyPath('doc', 'analysis_status');
+        const embeddingPath = this.getPropertyPath('doc', 'analysis', 'embedding');
+        const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+        const runIdPath = this.getPropertyPath('doc', 'run_id');
+
+        let whereClause = `${analysisStatusPath} = 'analyzed' AND (${embeddingPath} IS NULL)`;
+        let params = [];
+
+        if (campaignId && runId) {
+            whereClause += ` AND ${campaignIdPath} = $1 AND ${runIdPath} = $2`;
+            params = [campaignId, runId];
+        } else if (campaignId) {
+            whereClause += ` AND ${campaignIdPath} = $1`;
+            params = [campaignId];
+        }
+
+        const queryPromises = platformCollections.map(async (collection) => {
+            const collectionPath = this.getCollectionPath(collection);
+            const query = `SELECT id as docid, doc, '${collection}' as source_collection FROM ${collectionPath} WHERE ${whereClause}`;
+            try {
+                return await this.query(query, { parameters: params });
+            } catch (err) {
+                logger.warn(`Failed to fetch posts missing embeddings for ${collection}`, { error: err.message });
+                return [];
+            }
+        });
+
+        const results = await Promise.all(queryPromises);
+        return results.flat();
+    }
+
+    async getPosts(campaignId, platformCollections, options = {}) {
+        const { limit = 50, offset = 0, sort = 'sentiment', sentiment = 'all', run_id = null } = options;
+
+        const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+        const statusPath = this.getPropertyPath('doc', 'analysis_status');
+
+        let whereClause = `${campaignIdPath} = $1 AND ${statusPath} = 'analyzed'`;
+        let params = [campaignId];
+
+        if (sentiment === 'positive') {
+            const scorePath = this.getPropertyPath('doc', 'analysis', 'sentiment_score');
+            whereClause += ` AND (${scorePath})::float >= 8`;
+        } else if (sentiment === 'neutral') {
+            const scorePath = this.getPropertyPath('doc', 'analysis', 'sentiment_score');
+            whereClause += ` AND (${scorePath})::float >= 4 AND (${scorePath})::float < 8`;
+        } else if (sentiment === 'negative') {
+            const scorePath = this.getPropertyPath('doc', 'analysis', 'sentiment_score');
+            whereClause += ` AND (${scorePath})::float < 4`;
+        }
+
+        if (run_id) {
+            const runIdPath = this.getPropertyPath('doc', 'run_id');
+            whereClause += ` AND ${runIdPath} = $2`;
+            params.push(run_id);
+        }
+
+        // For large datasets, fetching everything and sorting in memory might be problematic, 
+        // but since we need cross-table sort/limit on slightly different objects, 
+        // and CrateDB UNION ALL is failing on object casting, this is the most robust way.
+        // We fetch with a higher limit from each table and then merge/sort/limit.
+        const queryPromises = platformCollections.map(async (collection) => {
+            const collectionPath = this.getCollectionPath(collection);
+            const query = `SELECT doc FROM ${collectionPath} WHERE ${whereClause} LIMIT ${limit + offset}`;
+            try {
+                return await this.query(query, { parameters: params });
+            } catch (err) {
+                logger.warn(`Failed to fetch posts for ${collection}`, { error: err.message });
+                return [];
+            }
+        });
+
+        const allPlatformResults = await Promise.all(queryPromises);
+        const results = allPlatformResults.flat().map(r => r.doc);
+
+        // Sort in memory
+        results.sort((a, b) => {
+            let valA, valB;
+            if (sort === 'engagement') {
+                valA = parseInt(a?.raw_data?.engagement?.likes || 0);
+                valB = parseInt(b?.raw_data?.engagement?.likes || 0);
+            } else if (sort === 'date') {
+                valA = new Date(a?.raw_data?.date_posted || 0).getTime();
+                valB = new Date(b?.raw_data?.date_posted || 0).getTime();
+            } else {
+                valA = parseFloat(a?.analysis?.sentiment_score || 0);
+                valB = parseFloat(b?.analysis?.sentiment_score || 0);
+            }
+            return valB - valA; // Descending
+        });
+
+        return results.slice(offset, offset + limit);
+    }
+
+    async getTotalPostCount(campaignId, platformCollections) {
+        const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+
+        const countPromises = platformCollections.map(async (collection) => {
+            const collectionPath = this.getCollectionPath(collection);
+            const query = `SELECT COUNT(*) as count FROM ${collectionPath} WHERE ${campaignIdPath} = $1`;
+            try {
+                const result = await this.query(query, { parameters: [campaignId] });
+                return parseInt(result[0]?.count || 0);
+            } catch (err) {
+                logger.warn(`Failed to count posts for ${collection}`, { error: err.message });
+                return 0;
+            }
+        });
+
+        const counts = await Promise.all(countPromises);
+        return counts.reduce((sum, c) => sum + c, 0);
+    }
+
+    async findCampaigns(limit = 100) {
+        const collectionPath = this.getCollectionPath('searches');
+        const typePath = this.getPropertyPath('doc', 'type');
+        const query = `
+            SELECT doc FROM ${collectionPath}
+            WHERE ${typePath} IN ('campaign', 'search_parent')
+            ORDER BY doc['created_at'] DESC
+            LIMIT $1
+        `;
+        const results = await this.query(query, { parameters: [limit] });
+        return results.map(r => r.doc);
+    }
+
+    async findRuns(campaignId, options = {}) {
+        const { limit = 50, offset = 0, latestOnly = false } = options;
+        const collectionPath = this.getCollectionPath('search_runs');
+        const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+        const runAtPath = this.getPropertyPath('doc', 'run_at');
+
+        let query = `
+            SELECT doc FROM ${collectionPath} 
+            WHERE ${campaignIdPath} = $1 
+            ORDER BY ${runAtPath} DESC 
+        `;
+
+        let params = [campaignId];
+        if (latestOnly) {
+            query += ' LIMIT 1';
+        } else {
+            query += ' LIMIT $2 OFFSET $3';
+            params.push(limit, offset);
+        }
+
+        const results = await this.query(query, { parameters: params });
+        return results.map(r => r.doc);
+    }
+
+    async findStuckRuns(cutoffTime) {
+        const collectionPath = this.getCollectionPath('search_runs');
+        const statusPath = this.getPropertyPath('doc', 'status');
+        const runAtPath = this.getPropertyPath('doc', 'run_at');
+        const query = `
+            SELECT doc FROM ${collectionPath} 
+            WHERE ${statusPath} = 'running' 
+            AND ${runAtPath} < $1
+        `;
+        const results = await this.query(query, { parameters: [cutoffTime] });
+        return results.map(r => r.doc);
+    }
+
+    async deleteRunsByCampaignId(campaignId) {
+        const collectionPath = this.getCollectionPath('search_runs');
+        const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+        const returning = this.config.db.type === 'cratedb' ? '' : ' RETURNING id';
+        const query = `DELETE FROM ${collectionPath} WHERE ${campaignIdPath} = $1${returning}`;
+        return await this.query(query, { parameters: [campaignId] });
+    }
+
+    async deleteAllCollection(collectionName) {
+        const collectionPath = this.getCollectionPath(collectionName);
+        const returning = this.config.db.type === 'cratedb' ? '' : ' RETURNING id';
+        return await this.query(`DELETE FROM ${collectionPath}${returning}`);
+    }
+
+    async getAggregatedStats(campaignId, platformCollections) {
+        // ... (existing implementation)
+        const statsPromises = platformCollections.map(async (collection) => {
+            const sentimentScorePath = this.getPropertyPath('doc', 'analysis', 'sentiment_score');
+            const likesPath = this.getPropertyPath('doc', 'raw_data', 'engagement', 'likes');
+            const numCommentsPath = this.getPropertyPath('doc', 'raw_data', 'engagement', 'num_comments');
+            const commentsPath = this.getPropertyPath('doc', 'raw_data', 'engagement', 'comments');
+            const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+            const analysisStatusPath = this.getPropertyPath('doc', 'analysis_status');
+
+            const collectionPath = this.getCollectionPath(collection);
+            const query = `
+                SELECT 
+                    COUNT(*) as total_posts,
+                    COUNT(CASE WHEN ${analysisStatusPath} = 'analyzed' THEN 1 END) as analyzed_posts,
+                    AVG((${sentimentScorePath})::float) as avg_sentiment,
+                    SUM((${likesPath})::int) as total_likes,
+                    SUM(CASE 
+                        WHEN ${numCommentsPath} IS NOT NULL AND (${numCommentsPath})::text ~ '^[0-9]+$' THEN (${numCommentsPath})::int
+                        WHEN ${commentsPath} IS NOT NULL AND (${commentsPath})::text ~ '^[0-9]+$' THEN (${commentsPath})::int
+                        ELSE 0 
+                    END) as total_comments,
+                    SUM(CASE WHEN (${sentimentScorePath})::float >= 8 THEN 1 ELSE 0 END) as positive_count,
+                    SUM(CASE WHEN (${sentimentScorePath})::float >= 4 AND (${sentimentScorePath})::float < 8 THEN 1 ELSE 0 END) as neutral_count,
+                    SUM(CASE WHEN (${sentimentScorePath})::float < 4 THEN 1 ELSE 0 END) as negative_count
+                FROM ${collectionPath} p
+                WHERE ${campaignIdPath} = $1
+            `;
+
+            try {
+                const results = await this.query(query, { parameters: [campaignId] });
+                const stats = results[0] || {};
+                return {
+                    total_posts: Number(stats.total_posts || 0),
+                    analyzed_posts: Number(stats.analyzed_posts || 0),
+                    avg_sentiment: stats.avg_sentiment ? parseFloat(stats.avg_sentiment) : 0,
+                    total_likes: Number(stats.total_likes || 0),
+                    total_comments: Number(stats.total_comments || 0),
+                    positive_count: Number(stats.positive_count || 0),
+                    neutral_count: Number(stats.neutral_count || 0),
+                    negative_count: Number(stats.negative_count || 0)
+                };
+            } catch (err) {
+                logger.warn(`Failed to query ${collection}`, { error: err.message });
+                return {};
+            }
+        });
+
+        return await Promise.all(statsPromises);
+    }
+
+    async getPostsWithEmbeddings(campaignId, platformCollections, sentiment = null) {
+        const fetchPromises = platformCollections.map(async (collection) => {
+            const tableName = this._getTableName(collection);
+            const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
+            const statusPath = this.getPropertyPath('doc', 'analysis_status');
+            const embeddingPath = this.getPropertyPath('doc', 'analysis', 'embedding');
+            const sentimentPath = this.getPropertyPath('doc', 'analysis', 'sentiment_score');
+
+            let whereClause = `${campaignIdPath} = $1 AND ${statusPath} = 'analyzed' AND ${embeddingPath} IS NOT NULL`;
+            let params = [campaignId];
+
+            if (sentiment === 'positive') {
+                whereClause += ` AND (${sentimentPath})::float >= 8`;
+            } else if (sentiment === 'neutral') {
+                whereClause += ` AND (${sentimentPath})::float >= 4 AND (${sentimentPath})::float < 8`;
+            } else if (sentiment === 'negative') {
+                whereClause += ` AND (${sentimentPath})::float < 4`;
+            }
+
+            const query = `
+                SELECT id, doc, '${collection}' as source_collection
+                FROM ${tableName}
+                WHERE ${whereClause}
+                LIMIT 500
+            `;
+
+            try {
+                const results = await this.pool.query(query, params);
+                return results.rows;
+            } catch (err) {
+                logger.warn(`Failed to fetch posts with embeddings from ${collection}`, { error: err.message });
+                return [];
+            }
+        });
+
+        const allResults = await Promise.all(fetchPromises);
+        return allResults.flat();
     }
 }
 

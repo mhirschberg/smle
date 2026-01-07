@@ -20,51 +20,9 @@ async function generateEmbeddings(campaignId = null, runId = null) {
 
     logger.info('Finding posts without embeddings...', { scope: campaignId ? 'campaign' : 'all', dbType });
 
-    if (dbType === 'postgres' || dbType === 'cratedb') {
-      let whereClause = "doc->>'analysis_status' = 'analyzed' AND (doc->'analysis'->>'embedding' IS NULL)";
-
-      if (campaignId && runId) {
-        whereClause += " AND doc->>'campaign_id' = $1 AND doc->>'run_id' = $2";
-        parameters = [campaignId, runId];
-      } else if (campaignId) {
-        whereClause += " AND doc->>'campaign_id' = $1";
-        parameters = [campaignId];
-      }
-
-      const unionQueries = platforms.map(platform => {
-        const collection = platformManager.getCollection(platform);
-        return `SELECT id as docid, doc, '${collection}' as source_collection FROM ${collection} WHERE ${whereClause}`;
-      });
-
-      query = unionQueries.join(' UNION ALL ');
-    } else {
-      // Couchbase N1QL
-      let whereClause = `p.analysis_status = 'analyzed' AND (p.analysis.embedding IS NULL OR p.analysis.embedding IS MISSING)`;
-      let n1qlParams = {};
-
-      if (campaignId && runId) {
-        whereClause = `p.campaign_id = $campaignId AND p.run_id = $runId AND ${whereClause}`;
-        n1qlParams.campaignId = campaignId;
-        n1qlParams.runId = runId;
-      } else if (campaignId) {
-        whereClause = `p.campaign_id = $campaignId AND ${whereClause}`;
-        n1qlParams.campaignId = campaignId;
-      }
-
-      const unionQueries = platforms.map(platform => {
-        const collection = platformManager.getCollection(platform);
-        return `
-          SELECT META().id as docId, p.*, '${collection}' as source_collection
-          FROM SMLE._default.${collection} p
-          WHERE ${whereClause}
-        `;
-      });
-
-      query = unionQueries.join(' UNION ALL ');
-      parameters = n1qlParams;
-    }
-
-    const results = await db.query(query, { parameters });
+    // Fetch posts needing embeddings using repository (Query Orchestration)
+    // We fetch ALL posts missing embeddings for the campaign to bridge gaps
+    const results = await postRepository.getPostsMissingEmbeddings(campaignId, null, platforms);
 
     logger.info(`Found ${results.length} posts needing embeddings`);
 
@@ -82,7 +40,7 @@ async function generateEmbeddings(campaignId = null, runId = null) {
     });
     logger.info('Posts by platform', byPlatform);
 
-    const CONCURRENCY = 10;
+    const CONCURRENCY = 5;
     let successCount = 0;
     let failCount = 0;
 

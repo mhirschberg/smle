@@ -6,8 +6,13 @@ const dbFactory = require('../modules/storage/dbFactory');
 async function setupAuth() {
     let db;
     try {
-        const username = 'root';
-        const password = 'Sobaka!123';
+        const username = process.env.ADMIN_USERNAME;
+        const password = process.env.ADMIN_PASSWORD;
+
+        if (!username || !password) {
+            logger.error('ADMIN_USERNAME and ADMIN_PASSWORD environment variables are required');
+            process.exit(1);
+        }
 
         logger.info('Initializing database adapter...');
         db = await dbFactory.getDB();
@@ -17,7 +22,8 @@ async function setupAuth() {
         logger.info('Creating indexes if needed...');
         if (dbType === 'couchbase') {
             try {
-                await db.query(`CREATE INDEX \`ix_users_username\` ON SMLE._default._default(username) WHERE type = 'user'`);
+                const collectionPath = db.getCollectionPath('users');
+                await db.query(`CREATE INDEX \`ix_users_username\` ON ${collectionPath}(username) WHERE type = 'user'`);
             } catch (e) { /* ignore if exists */ }
         }
 
@@ -35,7 +41,8 @@ async function setupAuth() {
             query = `SELECT id FROM _default WHERE doc->>'type' = 'user' AND doc->>'username' = $1 LIMIT 1`;
             params = [username];
         } else {
-            query = `SELECT META().id as id FROM SMLE._default._default WHERE type = 'user' AND username = $username LIMIT 1`;
+            const collectionPath = db.getCollectionPath('users');
+            query = `SELECT META().id as id FROM ${collectionPath} WHERE type = 'user' AND username = $username LIMIT 1`;
             params = { username };
         }
 
@@ -48,7 +55,7 @@ async function setupAuth() {
         if (result.length > 0) {
             const id = result[0].id;
             logger.info(`User ${username} exists (id: ${id}). Updating password...`);
-            await db.upsert('_default', id, {
+            await db.upsert('users', id, {
                 id,
                 type: 'user',
                 username,
@@ -57,7 +64,7 @@ async function setupAuth() {
             });
         } else {
             const id = uuidv4();
-            await db.insert('_default', id, {
+            await db.insert('users', id, {
                 id,
                 type: 'user',
                 username,

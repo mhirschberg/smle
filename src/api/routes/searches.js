@@ -29,6 +29,9 @@ router.post('/:id/run', (req, res) => searchController.triggerManualRun(req, res
 // Pause/Resume campaign
 router.patch('/:id/status', (req, res) => searchController.toggleCampaignStatus(req, res));
 
+// Resume an interrupted run
+router.post('/runs/:runId/resume', (req, res) => searchController.resumeRun(req, res));
+
 // Delete campaign
 router.delete('/:id', (req, res) => searchController.deleteCampaign(req, res));
 

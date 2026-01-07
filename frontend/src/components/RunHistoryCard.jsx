@@ -25,7 +25,7 @@ const RunHistoryCard = ({ run, onClick }) => {
   const avgSentiment = run.stats?.avg_sentiment;
 
   return (
-    <div 
+    <div
       onClick={onClick}
       className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow cursor-pointer"
     >
@@ -58,18 +58,18 @@ const RunHistoryCard = ({ run, onClick }) => {
         )}
       </div>
 
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <div className="bg-gray-50 rounded p-2">
-          <div className="text-lg font-bold text-gray-800">
-            {run.stats?.urls_found || 0}
-          </div>
-          <div className="text-xs text-gray-600">URLs</div>
-        </div>
+      <div className="grid grid-cols-4 gap-2 text-center mb-3">
         <div className="bg-gray-50 rounded p-2">
           <div className="text-lg font-bold text-gray-800">
             {run.stats?.posts_scraped || 0}
           </div>
-          <div className="text-xs text-gray-600">Scraped</div>
+          <div className="text-xs text-gray-600">Total</div>
+        </div>
+        <div className="bg-gray-50 rounded p-2">
+          <div className="text-lg font-bold text-blue-600">
+            {run.stats?.posts_new || 0}
+          </div>
+          <div className="text-xs text-gray-600">New</div>
         </div>
         <div className="bg-gray-50 rounded p-2">
           <div className="text-lg font-bold text-gray-800">
@@ -77,7 +77,28 @@ const RunHistoryCard = ({ run, onClick }) => {
           </div>
           <div className="text-xs text-gray-600">Analyzed</div>
         </div>
+        <div className="bg-gray-50 rounded p-2">
+          <div className="text-lg font-bold text-gray-800">
+            {run.stats?.urls_found || 0}
+          </div>
+          <div className="text-xs text-gray-600">URLs</div>
+        </div>
       </div>
+
+      {run.status === 'failed' && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (window.confirm('Resume analysis for Run #' + run.run_number + '?')) {
+              window.dispatchEvent(new CustomEvent('resume-run', { detail: { runId: run.id } }));
+            }
+          }}
+          className="w-full py-2 bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center space-x-2"
+        >
+          <Loader className="w-4 h-4" />
+          <span>Resume Analysis</span>
+        </button>
+      )}
     </div>
   );
 };

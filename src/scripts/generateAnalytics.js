@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const dbFactory = require('../modules/storage/dbFactory');
 const campaignRepository = require('../modules/repositories/campaignRepository');
+const postRepository = require('../modules/repositories/postRepository');
 const analyticsRepository = require('../modules/repositories/analyticsRepository');
 const trendCalculator = require('../modules/analytics/trendCalculator');
 const logger = require('../utils/logger');
@@ -40,41 +41,9 @@ async function generateAnalytics(campaignId, runId) {
       platforms: platforms
     });
 
-    // Build UNION query for all platforms
-    let query;
-    let params;
-
-    if (dbType === 'postgres' || dbType === 'cratedb') {
-      const unionQueries = platforms.map(platform => {
-        const collection = platformManager.getCollection(platform);
-        return `
-          SELECT doc
-          FROM ${collection}
-          WHERE doc->>'campaign_id' = $1
-          AND doc->>'run_id' = $2
-          AND doc->>'analysis_status' = 'analyzed'
-        `;
-      });
-      query = unionQueries.join(' UNION ALL ');
-      params = [campaignId, runId];
-    } else {
-      const unionQueries = platforms.map(platform => {
-        const collection = platformManager.getCollection(platform);
-        return `
-          SELECT p.*
-          FROM SMLE._default.${collection} p
-          WHERE p.campaign_id = $campaignId
-          AND p.run_id = $runId
-          AND p.analysis_status = 'analyzed'
-        `;
-      });
-      query = unionQueries.join(' UNION ALL ');
-      params = { campaignId, runId };
-    }
-
-    const results = await db.query(query, {
-      parameters: params
-    });
+    // Fetch analyzed posts using repository (Query Orchestration)
+    // We fetch ALL analyzed posts for the campaign to ensure full coverage
+    const results = await postRepository.getPostsByStatus(campaignId, null, platforms, 'analyzed');
 
     const posts = results.map(r => r.doc || r.p || r);
 
@@ -107,6 +76,7 @@ async function generateAnalytics(campaignId, runId) {
       platforms: platforms,
       created_at: now,
       post_count: posts.length,
+      average_sentiment: posts.reduce((sum, p) => sum + (p.analysis?.sentiment_score || 0), 0) / (posts.length || 1),
       posts_by_platform: postsByPlatform,
 
       sentiment_distribution: trendCalculator.calculateSentimentDistribution(posts),
@@ -144,6 +114,35 @@ async function generateAnalytics(campaignId, runId) {
     // Step 5: Store analytics
     logger.info('Step 5: Storing analytics...');
     await db.upsert('analytics', analytics.id, analytics);
+
+    // Update Run document with stats
+    try {
+      const run = await campaignRepository.getRun(runId);
+      if (run) {
+        if (!run.stats) run.stats = {};
+
+        run.stats.posts_analyzed = posts.length;
+        run.stats.avg_sentiment = analytics.average_sentiment;
+
+        // Mark as completed
+        run.status = 'completed';
+        run.completed_at = now;
+
+        // Update platform breakdown in run stats if needed
+        if (!run.stats.by_platform) run.stats.by_platform = {};
+        Object.entries(postsByPlatform).forEach(([platform, count]) => {
+          if (!run.stats.by_platform[platform]) run.stats.by_platform[platform] = {};
+          run.stats.by_platform[platform].total_posts = count;
+          run.stats.by_platform[platform].avg_sentiment = analytics.by_platform[platform]?.avg_sentiment;
+        });
+
+        await campaignRepository.updateRun(runId, run);
+        logger.info('Run stats updated', { runId, avg_sentiment: run.stats.avg_sentiment });
+      }
+    } catch (err) {
+      logger.error('Failed to update run stats', { error: err.message });
+      // Don't fail the whole process if just the run update fails, as analytics are saved
+    }
 
     logger.info('Analytics stored', { analyticsId: analytics.id });
 

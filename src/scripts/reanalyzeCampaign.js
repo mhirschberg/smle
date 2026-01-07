@@ -32,33 +32,54 @@ async function reanalyzeCampaign(campaignId) {
       let params = { campaignId };
 
       if (dbType === 'postgres' || dbType === 'cratedb') {
-        // SQL Migration logic
-        query = `
-          UPDATE ${collection}
-          SET doc = jsonb_set(
-            jsonb_set(doc, '{analysis_status}', '"pending"'),
-            '{analysis}',
-            '{
-              "sentiment_score": null,
-              "sentiment_label": null,
-              "key_topics": [],
-              "brand_mentioned": null,
-              "summary": null,
-              "language": null,
-              "embedding": null,
-              "analyzed_at": null,
-              "llm_model": null,
-              "error": null
-            }'::jsonb
-          )
-          WHERE doc->>'campaign_id' = $1
-          AND doc->>'analysis_status' = 'analyzed'
-          RETURNING id
-        `;
-        params = [campaignId];
+        const collectionPath = db.getCollectionPath(collection);
+        const campaignIdPath = db.getPropertyPath('doc', 'campaign_id');
+        const statusPath = db.getPropertyPath('doc', 'analysis_status');
+        const analysisPath = db.getPropertyPath('doc', 'analysis');
+        const returning = dbType === 'cratedb' ? '' : ' RETURNING id';
+
+        // Simplified reset logic: set analysis_status and analysis object
+        // For CrateDB/Postgres we use standard SQL update on the columns
+        const emptyAnalysis = JSON.stringify({
+          sentiment_score: null,
+          sentiment_label: null,
+          key_topics: [],
+          brand_mentioned: null,
+          summary: null,
+          language: null,
+          embedding: null,
+          analyzed_at: null,
+          llm_model: null,
+          error: null
+        });
+
+        if (dbType === 'postgres') {
+          query = `
+            UPDATE ${collectionPath}
+            SET doc = jsonb_set(
+              jsonb_set(doc, '{analysis_status}', '"pending"'),
+              '{analysis}',
+              $2::jsonb
+            )
+            WHERE ${campaignIdPath} = $1
+            AND ${statusPath} = 'analyzed'
+            ${returning}
+          `;
+        } else {
+          // CrateDB approach: update subcolumns directly
+          query = `
+            UPDATE ${collectionPath}
+            SET ${statusPath} = 'pending',
+                ${analysisPath} = $2
+            WHERE ${campaignIdPath} = $1
+            AND ${statusPath} = 'analyzed'
+          `;
+        }
+        params = [campaignId, emptyAnalysis];
       } else {
+        const collectionPath = db.getCollectionPath(collection);
         query = `
-          UPDATE SMLE._default.${collection}
+          UPDATE ${collectionPath}
           SET analysis_status = 'pending',
               analysis = {
                 "sentiment_score": null,
@@ -76,6 +97,7 @@ async function reanalyzeCampaign(campaignId) {
           AND analysis_status = 'analyzed'
           RETURNING META().id
         `;
+        params = { campaignId };
       }
 
       try {

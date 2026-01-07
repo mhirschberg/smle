@@ -6,7 +6,7 @@ class QueryParser {
     this.endpoint = process.env.LLM_ENDPOINT || 'http://localhost:11434';
     this.model = process.env.LLM_MODEL || 'llama3.2:1b';
   }
-  
+
   /**
    * Parse natural language query into structured filters
    * @param {string} query - Natural language query
@@ -15,27 +15,29 @@ class QueryParser {
   async parseQuery(query) {
     try {
       logger.info('Parsing natural language query', { query });
-      
+
       const prompt = this.buildParsingPrompt(query);
       const response = await this.callOllama(prompt);
       const parsed = this.parseResponse(response);
-      
+
       logger.info('Query parsed', { parsed });
-      
+
       return parsed;
-      
+
     } catch (error) {
       logger.error('Failed to parse query', { error: error.message });
-      
+
       // Fallback to simple keyword search
       return {
         type: 'semantic',
         search_query: query,
+        platforms: ['all'],
+        sentiment: 'all',
         filters: {}
       };
     }
   }
-  
+
   /**
    * Build parsing prompt
    */
@@ -64,13 +66,13 @@ Examples:
 
 Response must be ONLY valid JSON (no markdown, no explanations):`;
   }
-  
+
   /**
    * Call Ollama API
    */
   async callOllama(prompt) {
     const url = `${this.endpoint}/api/generate`;
-    
+
     const payload = {
       model: this.model,
       prompt: prompt,
@@ -80,14 +82,14 @@ Response must be ONLY valid JSON (no markdown, no explanations):`;
         num_predict: 300
       }
     };
-    
+
     const response = await axios.post(url, payload, {
       timeout: 30000
     });
-    
+
     return response.data.response;
   }
-  
+
   /**
    * Parse LLM response
    */
@@ -98,15 +100,15 @@ Response must be ONLY valid JSON (no markdown, no explanations):`;
       cleaned = cleaned.replace(/```json\n?/g, '');
       cleaned = cleaned.replace(/```\n?/g, '');
       cleaned = cleaned.trim();
-      
+
       // Find JSON
       const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         cleaned = jsonMatch[0];
       }
-      
+
       const parsed = JSON.parse(cleaned);
-      
+
       return {
         type: parsed.type || 'semantic',
         keywords: parsed.keywords || [],
@@ -116,13 +118,13 @@ Response must be ONLY valid JSON (no markdown, no explanations):`;
         time_period: parsed.time_period || 'all',
         intent: parsed.intent || ''
       };
-      
+
     } catch (error) {
-      logger.error('Failed to parse query response', { 
+      logger.error('Failed to parse query response', {
         response: response.substring(0, 200),
-        error: error.message 
+        error: error.message
       });
-      
+
       // Fallback
       return {
         type: 'semantic',

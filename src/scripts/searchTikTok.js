@@ -32,7 +32,15 @@ async function searchTikTok(campaignId, runId) {
     }
 
     const searchQuery = campaign.search_query;
-    const postLimit = campaign.settings?.tiktok_post_limit || 100;
+    let settings = campaign.settings || {};
+    if (typeof settings === 'string') {
+      try {
+        settings = JSON.parse(settings);
+      } catch (e) {
+        settings = {};
+      }
+    }
+    const postLimit = settings.tiktok_post_limit || 100;
 
     logger.info('Campaign loaded', {
       campaignId,
@@ -99,89 +107,30 @@ async function searchTikTok(campaignId, runId) {
 
     logger.info(`Downloaded ${posts.length} TikTok posts`);
 
-    // Step 7: Store posts directly
-    logger.info('Step 7: Storing posts in database...');
+    const postRepository = require('../modules/repositories/postRepository');
+    const runNumber = run.run_number;
     const now = new Date().toISOString();
+    let newCount = 0;
+    let updatedCount = 0;
     let successCount = 0;
     let failCount = 0;
 
     for (const rawPost of posts) {
       try {
-        const postId = uuidv4();
+        const result = await postRepository.saveScrapedPost(
+          'tiktok',
+          rawPost,
+          campaignId,
+          runId,
+          runNumber
+        );
 
-        const postDocument = {
-          id: postId,
-          campaign_id: campaignId,
-          run_id: runId,
-          platform: 'tiktok',
-          platform_url: rawPost.url,
-          post_id: rawPost.post_id,
-          shortcode: rawPost.shortcode,
-          content_type: 'video',
-          created_at: now,
-          scraped_at: rawPost.timestamp || now,
-          analysis_status: 'pending',
-
-          raw_data: {
-            user_posted: rawPost.profile_username,
-            is_verified: rawPost.is_verified,
-            profile_image_link: rawPost.profile_avatar,
-            user_profile_url: rawPost.profile_url,
-            profile_id: rawPost.profile_id,
-            profile_followers: rawPost.profile_followers,
-
-            description: rawPost.description,
-            hashtags: rawPost.hashtags || [],
-
-            date_posted: rawPost.create_time,
-
-            engagement: {
-              likes: rawPost.digg_count || 0,
-              shares: rawPost.share_count || 0,
-              comments: rawPost.comment_count || 0,
-              views: rawPost.play_count || 0,
-              collects: rawPost.collect_count || 0
-            },
-
-            media: {
-              video_url: rawPost.video_url,
-              preview_image: rawPost.preview_image,
-              video_duration: rawPost.video_duration,
-              cdn_url: rawPost.cdn_url,
-              width: rawPost.width,
-              ratio: rawPost.ratio
-            },
-
-            music: rawPost.music ? {
-              id: rawPost.music.id,
-              title: rawPost.music.title || rawPost.original_sound,
-              author: rawPost.music.authorname,
-              original: rawPost.music.original,
-              cover: rawPost.music.covermedium,
-              play_url: rawPost.music.playurl
-            } : null,
-
-            region: rawPost.region,
-            post_type: rawPost.post_type
-          },
-
-          analysis: {
-            sentiment_score: null,
-            sentiment_label: null,
-            key_topics: [],
-            brand_mentioned: null,
-            summary: null,
-            language: null,
-            embedding: null,
-            analyzed_at: null,
-            llm_model: null,
-            error: null
-          }
-        };
-
-        await db.upsert('tiktok_posts', postId, postDocument);
+        if (result.isNew) {
+          newCount++;
+        } else {
+          updatedCount++;
+        }
         successCount++;
-
       } catch (error) {
         logger.error('Failed to store post', {
           url: rawPost.url,
@@ -191,7 +140,7 @@ async function searchTikTok(campaignId, runId) {
       }
     }
 
-    logger.info('Posts stored', { success: successCount, failed: failCount });
+    logger.info('Posts stored', { success: successCount, new: newCount, updated: updatedCount, failed: failCount });
 
     // Step 8: Update run with stats
     logger.info('Step 8: Updating run document...');
@@ -213,6 +162,8 @@ async function searchTikTok(campaignId, runId) {
     finalRun.stats.urls_found = (finalRun.stats.urls_found || 0) + posts.length;
     finalRun.stats.posts_scraped = (finalRun.stats.posts_scraped || 0) + successCount;
     finalRun.stats.posts_failed = (finalRun.stats.posts_failed || 0) + failCount;
+    finalRun.stats.posts_new = (finalRun.stats.posts_new || 0) + newCount;
+    finalRun.stats.posts_updated = (finalRun.stats.posts_updated || 0) + updatedCount;
     finalRun.updated_at = now;
 
     await campaignRepository.updateRun(runId, finalRun);
