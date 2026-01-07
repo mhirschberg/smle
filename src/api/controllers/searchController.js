@@ -731,9 +731,15 @@ class SearchController {
         platforms
       });
 
-      // Helper function to run npm script
-      const runScript = (script, args = []) => {
+      // Helper function to run npm script with timeout
+      const runScript = (script, args = [], timeoutMs = 600000) => { // Default 10 mins
         return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            logger.warn(`Script ${script} timed out after ${timeoutMs}ms. Killing child process...`, { campaignId, runId });
+            child.kill('SIGKILL');
+            reject(new Error(`Script ${script} timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+
           const child = spawn('npm', ['run', script, '--', ...args], {
             cwd: projectRoot,
             stdio: ['inherit', 'inherit', 'pipe']
@@ -745,6 +751,7 @@ class SearchController {
           });
 
           child.on('close', (code) => {
+            clearTimeout(timeout);
             if (code !== 0) {
               logger.error(`Script ${script} failed`, { code, stderr: stderr.substring(0, 500) });
               reject(new Error(`Script ${script} exited with code ${code}. Error: ${stderr.substring(0, 200)}`));
@@ -754,6 +761,7 @@ class SearchController {
           });
 
           child.on('error', (err) => {
+            clearTimeout(timeout);
             reject(err);
           });
         });
@@ -824,7 +832,8 @@ class SearchController {
         });
 
         const scrapePromises = platformsNeedingScraping.map(platform => {
-          return runScript('scrape-posts', [campaignId, runId, platform])
+          // Scraping can take up to 30 mins per the monitor + processing time
+          return runScript('scrape-posts', [campaignId, runId, platform], 2400000)
             .then(() => ({ platform, success: true }))
             .catch(err => ({ platform, success: false, error: err.message }));
         });
@@ -847,11 +856,11 @@ class SearchController {
 
       // Step 3: Analyze all posts
       logger.info('Step 3: Analyzing all posts...');
-      await runScript('analyze-posts', [campaignId, runId]);
+      await runScript('analyze-posts', [campaignId, runId], 1800000); // 30 mins
 
       // Step 4: Generate analytics
       logger.info('Step 4: Generating analytics...');
-      await runScript('analytics', [campaignId, runId]);
+      await runScript('analytics', [campaignId, runId], 600000); // 10 mins
 
       // Update run status
       const run = await campaignRepository.getRun(runId);

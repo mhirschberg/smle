@@ -65,10 +65,24 @@ async function runSerpSearch(campaignId, runId, specificPlatform = null) {
       logger.info(`Step 4: Fetching SERP results for ${platform}...`);
 
       try {
+        const heartbeat = async () => {
+          try {
+            const currentRun = await campaignRepository.getRun(runId);
+            if (currentRun) {
+              currentRun.updated_at = new Date().toISOString();
+              await campaignRepository.updateRun(runId, currentRun);
+            }
+          } catch (e) {
+            logger.debug('Heartbeat update failed', { error: e.message });
+          }
+        };
+
         const serpResults = await serpFetcher.fetchResultsForPlatform(
           searchQuery,
           platform,
-          googleDomain
+          googleDomain,
+          config.serp.maxResults,
+          heartbeat
         );
         logger.info(`Fetched ${serpResults.length} SERP results for ${platform}`);
 
