@@ -8,11 +8,16 @@ const Navbar = () => {
   useEffect(() => {
     configApi.getConfig()
       .then(response => {
-        const type = response.data?.db_type;
-        if (type === 'cratedb') setDbName('CrateDB');
-        else if (type === 'couchbase') setDbName('Couchbase');
-        else if (type === 'postgres') setDbName('PostgreSQL');
-        else setDbName(type.charAt(0).toUpperCase() + type.slice(1));
+        const { db_type, db_name } = response.data;
+        if (db_name) {
+          setDbName(db_name);
+        } else {
+          // Fallback legacy mapping
+          if (db_type === 'cratedb') setDbName('CrateDB Cloud');
+          else if (db_type === 'couchbase') setDbName('Couchbase Capella');
+          else if (db_type === 'postgres') setDbName('PostgreSQL');
+          else if (db_type) setDbName(db_type.charAt(0).toUpperCase() + db_type.slice(1));
+        }
       })
       .catch(err => {
         console.error('Failed to load config', err);
