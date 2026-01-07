@@ -429,8 +429,8 @@ class CrateDbAdapter extends DatabaseAdapter {
                 SELECT 
                     COUNT(*) as total_posts,
                     COUNT(CASE WHEN ${analysisStatusPath} = 'analyzed' THEN 1 END) as analyzed_posts,
-                    AVG((${sentimentScorePath})::float) as avg_sentiment,
-                    SUM((${likesPath})::int) as total_likes,
+                    AVG(NULLIF((${sentimentScorePath})::float, 0)) as avg_sentiment,
+                    SUM(COALESCE((${likesPath})::int, 0)) as total_likes,
                     SUM(CASE 
                         WHEN ${numCommentsPath} IS NOT NULL AND (${numCommentsPath})::text ~ '^[0-9]+$' THEN (${numCommentsPath})::int
                         WHEN ${commentsPath} IS NOT NULL AND (${commentsPath})::text ~ '^[0-9]+$' THEN (${commentsPath})::int
@@ -438,7 +438,7 @@ class CrateDbAdapter extends DatabaseAdapter {
                     END) as total_comments,
                     SUM(CASE WHEN (${sentimentScorePath})::float >= 8 THEN 1 ELSE 0 END) as positive_count,
                     SUM(CASE WHEN (${sentimentScorePath})::float >= 4 AND (${sentimentScorePath})::float < 8 THEN 1 ELSE 0 END) as neutral_count,
-                    SUM(CASE WHEN (${sentimentScorePath})::float < 4 THEN 1 ELSE 0 END) as negative_count
+                    SUM(CASE WHEN (${sentimentScorePath})::float > 0 AND (${sentimentScorePath})::float < 4 THEN 1 ELSE 0 END) as negative_count
                 FROM ${collectionPath} p
                 WHERE ${campaignIdPath} = $1
             `;

@@ -428,63 +428,59 @@ const SearchDetail = () => {
             </h3>
 
             {/* Platform Breakdown */}
-            {runs.length > 0 && runs[0].stats?.by_platform && (
+            {stats?.by_platform && (
               <div className="space-y-4">
-                {Object.entries(runs[0].stats.by_platform).map(([platform, platformStats]) => (
-                  <div
-                    key={platform}
-                    onClick={() => {
-                      setPlatformFilter(platform);
-                      setActiveTab('posts');
-                    }}
-                    className="p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow cursor-pointer bg-gray-50 hover:bg-gray-100"
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center space-x-3">
-                        <span className="text-3xl">{getPlatformIcon(platform)}</span>
-                        <div>
-                          <h4 className="font-semibold text-gray-800 capitalize">{platform}</h4>
-                          <p className="text-sm text-gray-600">
-                            {platformStats.analyzed_posts || 0} / {platformStats.total_posts || 0} posts analyzed
-                          </p>
-                        </div>
-                      </div>
-                      {platformStats.avg_sentiment && (
-                        <div className="text-right">
-                          <div className={`text-3xl font-bold ${getSentimentColor(platformStats.avg_sentiment)}`}>
-                            {platformStats.avg_sentiment.toFixed(1)}
+                {Object.entries(stats.by_platform)
+                  .filter(([_, platformStats]) => platformStats.total_posts > 0)
+                  .map(([platform, platformStats]) => (
+                    <div
+                      key={platform}
+                      onClick={() => {
+                        setPlatformFilter(platform);
+                        setActiveTab('posts');
+                      }}
+                      className="p-4 border border-gray-200 rounded-lg hover:shadow-md transition-shadow cursor-pointer bg-gray-50 hover:bg-gray-100"
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-3">
+                          <span className="text-3xl">{getPlatformIcon(platform)}</span>
+                          <div>
+                            <h4 className="font-semibold text-gray-800 capitalize">{platform}</h4>
+                            <p className="text-sm text-gray-600">
+                              {platformStats.analyzed_posts || 0} / {platformStats.total_posts || 0} posts analyzed
+                            </p>
                           </div>
-                          <div className="text-xs text-gray-500">avg sentiment</div>
                         </div>
-                      )}
-                    </div>
+                        {platformStats.avg_sentiment > 0 && (
+                          <div className="text-right">
+                            <div className={`text-3xl font-bold ${getSentimentColor(platformStats.avg_sentiment)}`}>
+                              {platformStats.avg_sentiment.toFixed(1)}
+                            </div>
+                            <div className="text-xs text-gray-500">avg sentiment</div>
+                          </div>
+                        )}
+                      </div>
 
-                    <div className="grid grid-cols-3 gap-3 text-center text-sm">
-                      <div className="bg-white rounded p-2">
-                        <div className="font-bold text-gray-800">
-                          {platformStats.posts_scraped || 0}
+                      <div className="grid grid-cols-2 gap-3 text-center text-sm">
+                        <div className="bg-white rounded p-2">
+                          <div className="font-bold text-gray-800">
+                            {platformStats.total_posts || 0}
+                          </div>
+                          <div className="text-xs text-gray-600">Total Scraped</div>
                         </div>
-                        <div className="text-xs text-gray-600">Scraped</div>
-                      </div>
-                      <div className="bg-white rounded p-2">
-                        <div className="font-bold text-gray-800">
-                          {platformStats.posts_analyzed || 0}
+                        <div className="bg-white rounded p-2">
+                          <div className="font-bold text-gray-800">
+                            {platformStats.analyzed_posts || 0}
+                          </div>
+                          <div className="text-xs text-gray-600">Total Analyzed</div>
                         </div>
-                        <div className="text-xs text-gray-600">Analyzed</div>
-                      </div>
-                      <div className="bg-white rounded p-2">
-                        <div className="font-bold text-gray-800">
-                          {platformStats.posts_failed || 0}
-                        </div>
-                        <div className="text-xs text-gray-600">Failed</div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
               </div>
             )}
 
-            {(!runs.length || !runs[0].stats?.by_platform) && (
+            {(!stats?.by_platform || Object.values(stats.by_platform).every(p => p.total_posts === 0)) && (
               <div className="text-center py-8 text-gray-500">
                 <Layers className="w-12 h-12 mx-auto mb-3 text-gray-400" />
                 <p>No platform data available yet. Run the campaign to see breakdown.</p>
