@@ -38,3 +38,5 @@ Thumbs.db
 
 # Project specific
 db_data/
+downloads/
+tmp/

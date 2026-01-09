@@ -4,6 +4,7 @@ const campaignRepository = require('../modules/repositories/campaignRepository')
 const serpFetcher = require('../modules/serp/serpFetcher');
 const urlExtractor = require('../modules/serp/urlExtractor');
 const logger = require('../utils/logger');
+const config = require('../config');
 
 async function runSerpSearch(campaignId, runId, specificPlatform = null) {
   let db;

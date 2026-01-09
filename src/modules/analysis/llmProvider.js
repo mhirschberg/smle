@@ -27,36 +27,42 @@ class LLMProvider {
    * @returns {Promise<string>} Generated text
    */
   async generate(prompt, options = {}) {
-    const { temperature = 0.3, maxTokens = 500 } = options;
+    const { temperature = 0.3, maxTokens = 500, images = [], model = null } = options;
 
     switch (this.provider) {
       case 'gemini':
-        return await this.generateGemini(prompt, temperature, maxTokens);
+        return await this.generateGemini(prompt, temperature, maxTokens, images, model);
 
       case 'openai':
-        return await this.generateOpenAI(prompt, temperature, maxTokens);
+        return await this.generateOpenAI(prompt, temperature, maxTokens, images, model);
 
       case 'ollama':
       default:
-        return await this.generateOllama(prompt, temperature, maxTokens);
+        return await this.generateOllama(prompt, temperature, maxTokens, images, model);
     }
   }
 
   /**
    * Generate with Ollama (local)
    */
-  async generateOllama(prompt, temperature, maxTokens) {
+  async generateOllama(prompt, temperature, maxTokens, images = [], model = null) {
     try {
-      const response = await axios.post(`${this.ollamaEndpoint}/api/generate`, {
-        model: this.ollamaModel,
+      const payload = {
+        model: model || this.ollamaModel,
         prompt: prompt,
         stream: false,
         options: {
           temperature: temperature,
           num_predict: maxTokens
         }
-      }, {
-        timeout: 120000
+      };
+
+      if (images && images.length > 0) {
+        payload.images = images; // Array of base64 strings
+      }
+
+      const response = await axios.post(`${this.ollamaEndpoint}/api/generate`, payload, {
+        timeout: 180000 // Increased for vision tasks
       });
 
       return response.data.response;

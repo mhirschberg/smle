@@ -100,17 +100,89 @@ class CrateDbAdapter extends DatabaseAdapter {
             // We also extract 'type' if present for faster filtering if we had a type column,
             // but for now let's just use the doc object.
 
+            // CrateDB/pg driver compatibility fix:
+            // Explicitly stringify the document to ensure CrateDB receives a JSON string
+            // and parses it correctly into the OBJECT column, avoiding "Cannot cast..." map format errors.
+            const docParam = JSON.stringify(document);
+
+            // CrateDB UPSERT syntax: INSERT INTO ... ON CONFLICT (id) DO UPDATE SET ...
+            // Explicit cast ::OBJECT is required regarding of driver behavior to force parsing of JSON string
             const query = `
                 INSERT INTO ${tableName} (id, doc)
-                VALUES ($1, $2)
-                ON CONFLICT (id) DO UPDATE SET doc = $2
+                VALUES ($1, $2::OBJECT)
+                ON CONFLICT (id) DO UPDATE SET doc = $2::OBJECT
             `;
 
-            await this.pool.query(query, [key, document]);
+            await this.pool.query(query, [key, docParam]);
             return true;
         } catch (error) {
             logger.error(`Failed to upsert document to ${collectionName}`, { key, error: error.message });
             throw error;
+        }
+    }
+
+    async update(collectionName, key, document) {
+        try {
+            const tableName = this._getTableName(collectionName);
+            const docParam = JSON.stringify(document);
+
+            const query = `
+                UPDATE ${tableName} 
+                SET doc = $2::OBJECT 
+                WHERE id = $1
+            `;
+
+            const result = await this.pool.query(query, [key, docParam]);
+            return result.rowCount > 0;
+        } catch (error) {
+            logger.error(`Failed to update document in ${collectionName}`, { key, error: error.message });
+            throw error;
+        }
+    }
+
+    async updatePlatformSummary(collectionName, runId, platform, summary) {
+        try {
+            const tableName = this._getTableName(collectionName);
+            // Sanitize platform key strictly to prevent SQL injection since we interpolate it
+            if (!/^[a-z0-9_]+$/i.test(platform)) {
+                throw new Error('Invalid platform key');
+            }
+
+            // CrateDB Atomic Update: UPDATE doc.search_runs SET doc['platform_summaries']['instagram'] = '...'
+            const query = `
+                UPDATE ${tableName}
+                SET doc['platform_summaries']['${platform}'] = $2
+                WHERE id = $1
+            `;
+
+            const result = await this.pool.query(query, [runId, summary]);
+            return result.rowCount > 0;
+        } catch (error) {
+            logger.error(`Failed to atomic update platform summary in ${collectionName}`, { runId, platform, error: error.message });
+            throw error;
+        }
+    }
+
+    async getRunInsights(runIds) {
+        if (!runIds || runIds.length === 0) return {};
+        try {
+            const runIdList = runIds.map(id => `'${id}'`).join(',');
+            const tableName = this._getTableName('search_run_insights');
+            const query = `SELECT id, doc FROM ${tableName} WHERE id IN (${runIdList})`;
+
+            const results = await this.pool.query(query);
+            const insightsMap = {};
+            if (results && results.rows) {
+                results.rows.forEach(row => {
+                    if (row.doc) {
+                        insightsMap[row.id] = row.doc;
+                    }
+                });
+            }
+            return insightsMap;
+        } catch (error) {
+            logger.warn('Failed to fetch run insights from CrateDB', { error: error.message });
+            return {};
         }
     }
 
@@ -273,8 +345,11 @@ class CrateDbAdapter extends DatabaseAdapter {
 
         const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
         const statusPath = this.getPropertyPath('doc', 'analysis_status');
+        const visionStatusPath = this.getPropertyPath('doc', 'smle_vision', 'status');
 
-        let whereClause = `${campaignIdPath} = $1 AND ${statusPath} = 'analyzed'`;
+        // Allow posts that are either fully analyzed OR have an active smle_vision process
+        // This ensures the "Analyzing..." cards appear in the UI even if the post isn't fully scraped/text-analyzed yet.
+        let whereClause = `${campaignIdPath} = $1 AND (${statusPath} = 'analyzed' OR ${visionStatusPath} IN ('processing', 'analyzing', 'completed', 'failed'))`;
         let params = [campaignId];
 
         if (sentiment === 'positive') {
@@ -300,7 +375,9 @@ class CrateDbAdapter extends DatabaseAdapter {
         // We fetch with a higher limit from each table and then merge/sort/limit.
         const queryPromises = platformCollections.map(async (collection) => {
             const collectionPath = this.getCollectionPath(collection);
-            const query = `SELECT doc FROM ${collectionPath} WHERE ${whereClause} LIMIT ${limit + offset}`;
+            const createdAtPath = this.getPropertyPath('doc', 'created_at');
+            // Add ORDER BY created_at DESC to ensure we get the most recent posts first
+            const query = `SELECT doc FROM ${collectionPath} WHERE ${whereClause} ORDER BY ${createdAtPath} DESC LIMIT ${limit + offset}`;
             try {
                 return await this.query(query, { parameters: params });
             } catch (err) {
@@ -314,6 +391,13 @@ class CrateDbAdapter extends DatabaseAdapter {
 
         // Sort in memory
         results.sort((a, b) => {
+            // Prioritize posts with smle_vision data (active or completed)
+            const aVision = a?.smle_vision?.status ? 1 : 0;
+            const bVision = b?.smle_vision?.status ? 1 : 0;
+            if (aVision !== bVision) {
+                return bVision - aVision; // Vision posts first
+            }
+
             let valA, valB;
             if (sort === 'engagement') {
                 valA = parseInt(a?.raw_data?.engagement?.likes || 0);
@@ -465,13 +549,14 @@ class CrateDbAdapter extends DatabaseAdapter {
         return await Promise.all(statsPromises);
     }
 
-    async getPostsWithEmbeddings(campaignId, platformCollections, sentiment = null) {
+    async getPostsWithEmbeddings(campaignId, platformCollections, sentiment = null, contentTypes = null) {
         const fetchPromises = platformCollections.map(async (collection) => {
             const tableName = this._getTableName(collection);
             const campaignIdPath = this.getPropertyPath('doc', 'campaign_id');
             const statusPath = this.getPropertyPath('doc', 'analysis_status');
             const embeddingPath = this.getPropertyPath('doc', 'analysis', 'embedding');
             const sentimentPath = this.getPropertyPath('doc', 'analysis', 'sentiment_score');
+            const contentTypePath = this.getPropertyPath('doc', 'content_type');
 
             let whereClause = `${campaignIdPath} = $1 AND ${statusPath} = 'analyzed' AND ${embeddingPath} IS NOT NULL`;
             let params = [campaignId];
@@ -482,6 +567,13 @@ class CrateDbAdapter extends DatabaseAdapter {
                 whereClause += ` AND (${sentimentPath})::float >= 4 AND (${sentimentPath})::float < 8`;
             } else if (sentiment === 'negative') {
                 whereClause += ` AND (${sentimentPath})::float < 4`;
+            }
+
+            if (contentTypes && contentTypes.length > 0) {
+                // Construct IN clause for content types
+                // e.g. AND doc['content_type'] IN ('reel', 'video')
+                const typeList = contentTypes.map(t => `'${t}'`).join(', ');
+                whereClause += ` AND ${contentTypePath} IN (${typeList})`;
             }
 
             const query = `

@@ -46,6 +46,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/searches', searchRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/search', nlSearchRoutes);
+app.use('/api/posts', require('./routes/posts'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/config', require('./routes/config'));
 

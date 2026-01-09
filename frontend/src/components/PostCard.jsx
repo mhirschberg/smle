@@ -1,7 +1,17 @@
 import React from 'react';
 import { Heart, MessageCircle, ExternalLink, TrendingUp, Share2, Eye } from 'lucide-react';
 
-const PostCard = ({ post }) => {
+const PostCard = ({ post, isSelected, onSelect }) => {
+  // Safety check: ensure post object exists
+  if (!post || !post.id) {
+    console.error('PostCard received invalid post data:', post);
+    return (
+      <div className="bg-red-50 rounded-lg shadow-md p-4 border border-red-200">
+        <p className="text-red-600 text-sm">Error: Invalid post data</p>
+      </div>
+    );
+  }
+
   const getSentimentColor = (score) => {
     if (score >= 8) return 'bg-green-100 text-green-800 border-green-300';
     if (score >= 4) return 'bg-yellow-100 text-yellow-800 border-yellow-300';
@@ -44,9 +54,9 @@ const PostCard = ({ post }) => {
   const getContent = () => {
     const platform = post.platform;
     const rawData = post.raw_data;
-    
+
     if (!rawData) return 'No content';
-    
+
     switch (platform) {
       case 'instagram':
       case 'tiktok':
@@ -67,8 +77,9 @@ const PostCard = ({ post }) => {
   };
 
   const getHashtags = () => {
-    const hashtags = post.raw_data?.hashtags || [];
-    
+    const hashtagData = post.raw_data?.hashtags;
+    const hashtags = Array.isArray(hashtagData) ? hashtagData : [];
+
     // Ensure hashtags are strings (handle both string[] and object[])
     return hashtags
       .map(tag => {
@@ -85,7 +96,7 @@ const PostCard = ({ post }) => {
   const getEngagement = () => {
     const platform = post.platform;
     const engagement = post.raw_data?.engagement || {};
-    
+
     return {
       likes: engagement.likes || engagement.upvotes || 0,
       comments: engagement.num_comments || engagement.comments || 0,
@@ -98,21 +109,57 @@ const PostCard = ({ post }) => {
   const hashtags = getHashtags();
   const engagement = getEngagement();
 
+  const isVideo = ['tiktok', 'youtube'].includes(post.platform) ||
+    (post.platform === 'instagram' && post.content_type === 'reel');
+
   return (
-    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-4 border border-gray-200">
-      {/* Platform Badge */}
-      <div className="mb-3">
-        <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded border ${getPlatformColor(post.platform)}`}>
-          <span>{getPlatformIcon(post.platform)}</span>
-          <span className="capitalize text-xs font-semibold">{post.platform}</span>
-        </span>
+    <div className={`bg-white rounded-lg shadow-md hover:shadow-lg transition-all p-4 border ${isSelected ? 'border-blue-500 ring-2 ring-blue-200' : 'border-gray-200'}`}>
+      {/* Top Bar: Selection & Platform */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center space-x-2">
+          {isVideo && (
+            <input
+              type="checkbox"
+              checked={isSelected || false}
+              onChange={(e) => {
+                try {
+                  e.stopPropagation();
+                  console.log('Checkbox clicked for post:', { id: post.id, platform: post.platform });
+                  if (onSelect) {
+                    onSelect(post.id, post.platform);
+                  } else {
+                    console.warn('onSelect handler is not defined');
+                  }
+                } catch (error) {
+                  console.error('Error in checkbox onChange:', error);
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
+            />
+          )}
+          <span className={`inline-flex items-center space-x-1 px-2 py-1 rounded border ${getPlatformColor(post.platform)}`}>
+            <span>{getPlatformIcon(post.platform)}</span>
+            <span className="capitalize text-xs font-semibold">{post.platform}</span>
+          </span>
+        </div>
+
+        {/* smle vision status */}
+        {post.smle_vision && (
+          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${post.smle_vision.status === 'completed' ? 'bg-indigo-100 text-indigo-700 border border-indigo-200' :
+            post.smle_vision.status === 'processing' ? 'bg-blue-100 text-blue-700 border border-blue-200 animate-pulse' :
+              'bg-red-100 text-red-700 border border-red-200'
+            }`}>
+            smle vision {post.smle_vision.status === 'completed' ? 'ready' : post.smle_vision.status}
+          </span>
+        )}
       </div>
 
       {/* Thumbnail */}
       {(post.raw_data?.media?.thumbnail || post.raw_data?.media?.preview_image || post.raw_data?.media?.post_image) && (
         <div className="mb-3 rounded-lg overflow-hidden">
-          <img 
-            src={post.raw_data.media.thumbnail || post.raw_data.media.preview_image || post.raw_data.media.post_image} 
+          <img
+            src={post.raw_data?.media?.thumbnail || post.raw_data?.media?.preview_image || post.raw_data?.media?.post_image}
             alt="Post thumbnail"
             className="w-full h-48 object-cover"
             onError={(e) => { e.target.style.display = 'none'; }}
@@ -124,8 +171,8 @@ const PostCard = ({ post }) => {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center space-x-2">
           {(post.raw_data?.profile_image_link || post.raw_data?.avatar_img_channel || post.raw_data?.author_profile_pic) && (
-            <img 
-              src={post.raw_data.profile_image_link || post.raw_data.avatar_img_channel || post.raw_data.author_profile_pic} 
+            <img
+              src={post.raw_data?.profile_image_link || post.raw_data?.avatar_img_channel || post.raw_data?.author_profile_pic}
               alt={post.raw_data.user_posted}
               className="w-8 h-8 rounded-full"
               onError={(e) => { e.target.style.display = 'none'; }}
@@ -133,7 +180,7 @@ const PostCard = ({ post }) => {
           )}
           <div>
             <div className="font-semibold text-sm">
-              @{post.raw_data?.user_posted || post.raw_data?.name || post.raw_data?.youtuber || 'Unknown'}
+              @{post.raw_data?.user_posted || post.raw_data?.owner?.username || post.raw_data?.user?.username || post.raw_data?.account_id || post.raw_data?.profile_username || post.raw_data?.author?.uniqueId || post.raw_data?.author_meta?.name || post.raw_data?.name || post.raw_data?.youtuber || 'Unknown'}
             </div>
             <div className="text-xs text-gray-500">
               {post.content_type === 'reel' && '🎥 Reel'}
@@ -146,9 +193,9 @@ const PostCard = ({ post }) => {
             </div>
           </div>
         </div>
-        <a 
-          href={post.platform_url} 
-          target="_blank" 
+        <a
+          href={post.platform_url}
+          target="_blank"
           rel="noopener noreferrer"
           className="text-blue-500 hover:text-blue-600"
         >
@@ -217,7 +264,7 @@ const PostCard = ({ post }) => {
       </div>
 
       {/* Topics */}
-      {post.analysis?.key_topics && post.analysis.key_topics.length > 0 && (
+      {Array.isArray(post.analysis?.key_topics) && post.analysis.key_topics.length > 0 && (
         <div className="mt-3 pt-3 border-t border-gray-200">
           <div className="text-xs text-gray-500 mb-1">Topics:</div>
           <div className="flex flex-wrap gap-1">

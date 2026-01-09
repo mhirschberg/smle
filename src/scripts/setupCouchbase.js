@@ -102,7 +102,8 @@ function log(...args) {
             'facebook_posts',
             'youtube_posts',
             'linkedin_posts',
-            'analytics'
+            'analytics',
+            'search_run_insights'
         ];
 
         for (const collName of collectionsToCreate) {

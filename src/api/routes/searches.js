@@ -20,6 +20,10 @@ router.get('/:id/stats', (req, res) => searchController.getSearchStats(req, res)
 // Get sentiment trend for a campaign
 router.get('/:id/trend', (req, res) => searchController.getSentimentTrend(req, res));
 
+// Get sentiment// Summaries
+router.get('/:id/sentiment-summary', (req, res) => searchController.getSentimentSummary(req, res));
+router.get('/:id/platform-summary', (req, res) => searchController.getPlatformSummary(req, res));
+
 // Create new campaign
 router.post('/', (req, res) => searchController.createSearch(req, res));
 
@@ -31,6 +35,9 @@ router.patch('/:id/status', (req, res) => searchController.toggleCampaignStatus(
 
 // Resume an interrupted run
 router.post('/runs/:runId/resume', (req, res) => searchController.resumeRun(req, res));
+
+// Trigger manual summary generation
+router.post('/:id/runs/:runId/generate-summaries', (req, res) => searchController.triggerRunSummaries(req, res));
 
 // Delete campaign
 router.delete('/:id', (req, res) => searchController.deleteCampaign(req, res));

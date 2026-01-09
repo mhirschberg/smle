@@ -2,23 +2,29 @@ import React, { useState } from 'react';
 import { Search, Loader, Sparkles, X, Lightbulb } from 'lucide-react';
 import PostCard from './PostCard';
 
-const NaturalLanguageSearch = ({ campaignId, campaign }) => {
-  const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [results, setResults] = useState(null);
-  const [error, setError] = useState(null);
+const NaturalLanguageSearch = ({
+  campaignId,
+  campaign,
+  selectedPosts = [],
+  onToggleSelect,
+  // Props from lifted state
+  query, setQuery,
+  results, setResults,
+  loading, setLoading,
+  error, setError
+}) => {
 
   // Generate dynamic examples based on campaign
   const generateExamples = () => {
     const searchQuery = campaign?.search_query || 'your topic';
     const platforms = campaign?.platforms || [];
-    
+
     const examples = [
       `find posts about ${searchQuery}`,
       'show negative posts',
       'posts with high engagement'
     ];
-    
+
     // Add platform-specific examples if multi-platform
     if (platforms.length > 1) {
       const platform1 = platforms[0];
@@ -28,10 +34,10 @@ const NaturalLanguageSearch = ({ campaignId, campaign }) => {
     } else if (platforms.length === 1) {
       examples.push(`trending posts from ${platforms[0]}`);
     }
-    
+
     // Add query-specific examples
     examples.push(`posts mentioning ${searchQuery.split(' ')[0]}`);
-    
+
     return examples.slice(0, 6);
   };
 
@@ -57,6 +63,7 @@ const NaturalLanguageSearch = ({ campaignId, campaign }) => {
       }
 
       const data = await response.json();
+      console.log('AI Search results received:', data);
       setResults(data);
 
     } catch (err) {
@@ -92,7 +99,7 @@ const NaturalLanguageSearch = ({ campaignId, campaign }) => {
           <Sparkles className="w-6 h-6 text-purple-600" />
           <h3 className="text-xl font-semibold text-gray-800">AI-Powered Search</h3>
         </div>
-        
+
         <div className="relative">
           <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
           <input
@@ -196,7 +203,11 @@ const NaturalLanguageSearch = ({ campaignId, campaign }) => {
                         {Math.round(post.similarity_score * 100)}% match
                       </span>
                     </div>
-                    <PostCard post={post} />
+                    <PostCard
+                      post={post}
+                      isSelected={selectedPosts.some(p => p.id === post.id)}
+                      onSelect={onToggleSelect}
+                    />
                   </div>
                 ))}
               </div>
