@@ -87,9 +87,42 @@ This is where the tech stack really shines. Because we generate vector embedding
 
 We built a **Natural Language Search** interface.
 
-Users don't have to search for "customer support" AND "fail" AND "angry." They can simply type: *“Find posts where people are complaining about shipping delays.”*
+Users don't have to search for "customer support" AND "fail" AND "angry." They can simply type: *"Find posts where people are complaining about shipping delays."*
 
 The engine performs a vector similarity search against the stored embeddings across all 7 platforms. It returns posts that match the *intent* of the query, even if they don't share a single keyword.
+
+## SMLE Vision: Deep Video Intelligence
+
+Beyond text analysis, **SMLE Vision** provides AI-powered video content analysis for TikTok, Instagram Reels, and YouTube videos.
+
+### How It Works
+
+1. **Video Download**: Automatically downloads videos using platform-specific downloaders with session-based proxying via Bright Data's Scraping Browser and Web Unlocker
+2. **Frame Extraction**: Extracts key frames at 1fps using FFmpeg
+3. **Visual Analysis**: Each frame is analyzed using a vision-capable LLM (llava:latest via Ollama)
+4. **Strategic Summary**: Aggregates frame analyses into executive summaries with:
+   - Overall sentiment (positive/neutral/negative)
+   - Visual themes and topics
+   - Product insights and brand appearance
+   - Strategic recommendations
+
+### Key Features
+
+- **Real-time Progress**: Terminal-style log viewer shows download and analysis progress
+- **Robust Downloads**: 
+  - TikTok & Instagram: Uses Scraping Browser with human-like interactions to evade bot detection
+  - YouTube: Enforces single-threaded, non-chunked downloads with rate limiting
+- **Smart JSON Parsing**: Automatically repairs malformed LLM responses
+- **Session Persistence**: Maintains browser sessions between scraping and downloading for reliability
+
+### Requirements
+
+- **FFmpeg**: For video frame extraction
+- **yt-dlp**: For YouTube downloads (included in project)
+- **Ollama with llava**: Vision-capable model for frame analysis
+- **Bright Data Credentials**:
+  - Scraping Browser (for TikTok/Instagram)
+  - Web Unlocker (for YouTube)
 
 ## Why This Matters
 
@@ -101,6 +134,8 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 ## Features
 - **Multi-Platform Tracking**: Monitor campaigns on Instagram, TikTok, Reddit, YouTube, and more.
 - **Sentiment Analysis**: Automated sentiment scoring for posts.
+- **SMLE Vision**: AI-powered video content analysis with frame-by-frame insights.
+- **Semantic Search**: Natural language queries across all platforms using vector embeddings.
 - **Real-time Dashboard**: Visualize campaign performance and trends.
 - **Self-Healing**: Automatic cleanup of stuck jobs.
 - **Secure Authentication**: JWT-based auth with protected routes.
@@ -192,6 +227,35 @@ Now pull the required models:
 ollama pull llama3.2:1b
 ollama pull nomic-embed-text
 ```
+
+### SMLE Vision Setup (Optional)
+
+For video analysis capabilities, install additional dependencies:
+
+**1. Install FFmpeg**
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt-get install ffmpeg
+
+# Windows
+# Download from https://ffmpeg.org/download.html
+```
+
+**2. Pull Vision Model**
+```bash
+ollama pull llava:latest
+```
+
+**3. Configure Bright Data Proxies**
+
+Update your `.env` with:
+- `SBR_USERNAME` and `SBR_PASSWORD` - Scraping Browser credentials
+- `UNLOCKER_USERNAME` and `UNLOCKER_PASSWORD` - Web Unlocker credentials
+
+These are required for downloading videos from TikTok, Instagram, and YouTube.
 
 ### 1. Start the Backend API
 In the root directory:
