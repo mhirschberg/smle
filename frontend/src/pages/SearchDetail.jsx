@@ -80,15 +80,20 @@ const SearchDetail = () => {
         setLoading(true);
       }
 
-      const [campaignRes, runsRes, postsRes, statsRes, trendRes] = await Promise.all([
-        searchApi.getById(id),
-        searchApi.getRuns(id, { limit: 50 }),
-        searchApi.getPosts(id, {
+      // When on SMLE Vision tab, ignore filters to show all analyzed posts
+      const postsParams = activeTab === 'smle-vision'
+        ? { limit: 100 }
+        : {
           limit: 100,
           sentiment: sentimentFilter,
           run_id: selectedRun,
           platform: platformFilter !== 'all' ? platformFilter : null
-        }),
+        };
+
+      const [campaignRes, runsRes, postsRes, statsRes, trendRes] = await Promise.all([
+        searchApi.getById(id),
+        searchApi.getRuns(id, { limit: 50 }),
+        searchApi.getPosts(id, postsParams),
         searchApi.getStats(id),
         searchApi.getTrend(id).catch(() => ({ data: { trend: [] } }))
       ]);

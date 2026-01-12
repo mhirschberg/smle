@@ -230,7 +230,10 @@ class CouchbaseAdapter extends DatabaseAdapter {
     async getPosts(campaignId, platformCollections, options = {}) {
         const { limit = 50, offset = 0, sort = 'sentiment', sentiment = 'all', run_id = null } = options;
 
-        let whereClause = `p.campaign_id = $id AND p.analysis_status = 'analyzed'`;
+        // Show posts that are either:
+        // 1. Fully text-analyzed (analysis_status = 'analyzed')
+        // 2. Have ANY smle_vision status
+        let whereClause = `p.campaign_id = $id AND (p.analysis_status = 'analyzed' OR p.smle_vision.status IS NOT MISSING)`;
         let params = { id: campaignId, limit: parseInt(limit), offset: parseInt(offset) };
 
         if (sentiment === 'positive') {
@@ -262,7 +265,10 @@ class CouchbaseAdapter extends DatabaseAdapter {
             SELECT * FROM (
                 ${unionQueries.join(' UNION ALL ')}
             ) AS combined
-            ORDER BY combined.${orderByField} DESC
+            ORDER BY 
+                CASE WHEN combined.smle_vision.status IS NOT MISSING THEN 1 ELSE 0 END DESC,
+                combined.${orderByField} DESC,
+                combined.id ASC
             LIMIT $limit OFFSET $offset
         `;
 

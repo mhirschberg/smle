@@ -347,9 +347,11 @@ class CrateDbAdapter extends DatabaseAdapter {
         const statusPath = this.getPropertyPath('doc', 'analysis_status');
         const visionStatusPath = this.getPropertyPath('doc', 'smle_vision', 'status');
 
-        // Allow posts that are either fully analyzed OR have an active smle_vision process
-        // This ensures the "Analyzing..." cards appear in the UI even if the post isn't fully scraped/text-analyzed yet.
-        let whereClause = `${campaignIdPath} = $1 AND (${statusPath} = 'analyzed' OR ${visionStatusPath} IN ('processing', 'analyzing', 'completed', 'failed'))`;
+        // Show posts that are either:
+        // 1. Fully text-analyzed (analysis_status = 'analyzed')
+        // 2. Have ANY smle_vision status (including 'completed')
+        // This ensures vision analyses persist even if text analysis is still pending
+        let whereClause = `${campaignIdPath} = $1 AND (${statusPath} = 'analyzed' OR ${visionStatusPath} IS NOT NULL)`;
         let params = [campaignId];
 
         if (sentiment === 'positive') {
@@ -389,7 +391,7 @@ class CrateDbAdapter extends DatabaseAdapter {
         const allPlatformResults = await Promise.all(queryPromises);
         const results = allPlatformResults.flat().map(r => r.doc);
 
-        // Sort in memory
+        // Sort in memory with stable ordering
         results.sort((a, b) => {
             // Prioritize posts with smle_vision data (active or completed)
             const aVision = a?.smle_vision?.status ? 1 : 0;
@@ -409,7 +411,14 @@ class CrateDbAdapter extends DatabaseAdapter {
                 valA = parseFloat(a?.analysis?.sentiment_score || 0);
                 valB = parseFloat(b?.analysis?.sentiment_score || 0);
             }
-            return valB - valA; // Descending
+
+            // Primary sort by the selected metric
+            if (valB !== valA) {
+                return valB - valA; // Descending
+            }
+
+            // Tertiary sort by ID for stable ordering (prevents cycling)
+            return (a?.id || '').localeCompare(b?.id || '');
         });
 
         return results.slice(offset, offset + limit);
