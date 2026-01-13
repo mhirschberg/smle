@@ -52,6 +52,7 @@ class SemanticSearch {
             campaignId,
             queryEmbedding,
             sentiment,
+            options.content_types, // Pass content_types
             limit
           );
 
@@ -90,9 +91,9 @@ class SemanticSearch {
   /**
    * Fetch posts with embeddings using orchestrated database method
    */
-  async fallbackSearch(db, collection, campaignId, queryEmbedding, sentiment, limit) {
+  async fallbackSearch(db, collection, campaignId, queryEmbedding, sentiment, contentTypes, limit) {
     const platformCollections = Array.isArray(collection) ? collection : [collection];
-    const results = await db.getPostsWithEmbeddings(campaignId, platformCollections, sentiment);
+    const results = await db.getPostsWithEmbeddings(campaignId, platformCollections, sentiment, contentTypes);
 
     const posts = results.map(r => ({
       id: r.id || r.docId,
@@ -115,6 +116,7 @@ class SemanticSearch {
       const similarity = this.cosineSimilarity(queryEmbedding, embedding);
       return {
         ...post,
+        platform: post.platform || (post.source_collection ? post.source_collection.replace('_posts', '') : 'unknown'),
         similarity_score: similarity
       };
     }).filter(p => p !== null);

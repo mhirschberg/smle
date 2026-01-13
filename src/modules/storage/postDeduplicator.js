@@ -94,22 +94,30 @@ class PostDeduplicator {
     try {
       const now = new Date().toISOString();
 
+      // CRITICAL: Fetch the latest version of the post to preserve fields like smle_vision
+      // that may have been added after the initial scrape
+      const db = await this.getDB();
+      const latestPost = await db.get(collection, docId);
+
+      // If we have a latest version, use it as the base and preserve critical fields
+      const basePost = latestPost || existingPost;
+
       // Initialize tracking fields if they don't exist
-      if (!existingPost.first_seen_run) {
-        existingPost.first_seen_run = existingPost.run_id ? 1 : runNumber;
+      if (!basePost.first_seen_run) {
+        basePost.first_seen_run = basePost.run_id ? 1 : runNumber;
       }
 
-      existingPost.last_seen_run = runNumber;
-      existingPost.total_appearances = (existingPost.total_appearances || 1) + 1;
-      existingPost.updated_at = now;
+      basePost.last_seen_run = runNumber;
+      basePost.total_appearances = (basePost.total_appearances || 1) + 1;
+      basePost.updated_at = now;
 
       // Add to engagement history
-      if (!existingPost.engagement_history) {
-        existingPost.engagement_history = [];
+      if (!basePost.engagement_history) {
+        basePost.engagement_history = [];
       }
 
       const newEngagement = newRawData.engagement || {};
-      existingPost.engagement_history.push({
+      basePost.engagement_history.push({
         run_number: runNumber,
         run_id: runId,
         date: now,
@@ -120,19 +128,19 @@ class PostDeduplicator {
       });
 
       // Update current engagement to latest
-      existingPost.raw_data.engagement = newEngagement;
+      basePost.raw_data.engagement = newEngagement;
 
       // Keep latest scraped data
-      existingPost.scraped_at = newRawData.timestamp || now;
+      basePost.scraped_at = newRawData.timestamp || now;
 
-      // Update the document
-      const db = await this.getDB();
-      await db.upsert(collection, docId, existingPost);
+      // Update the document (now preserves smle_vision and other fields)
+      await db.upsert(collection, docId, basePost);
 
       logger.debug('Post updated with new engagement data', {
         docId,
         runNumber,
-        appearances: existingPost.total_appearances
+        appearances: basePost.total_appearances,
+        preservedVision: !!basePost.smle_vision
       });
 
       return { updated: true, docId };

@@ -5,6 +5,7 @@ const platformManager = require('../../modules/platforms/platformManager');
 const logger = require('../../utils/logger');
 const { spawn } = require('child_process');
 const path = require('path');
+const summaryGenerator = require('../../modules/analysis/summaryGenerator');
 
 class SearchController {
   /**
@@ -122,7 +123,8 @@ class SearchController {
 
       const runs = await campaignRepository.getRuns(id, parseInt(limit), parseInt(offset));
 
-      logger.info('Fetched campaign runs', { campaignId: id, count: runs.length });
+      // Log at debug level to avoid cluttering console during polling
+      // logger.debug('Fetched campaign runs', { campaignId: id, count: runs.length });
 
       res.json({ runs, count: runs.length });
     } catch (error) {
@@ -167,7 +169,9 @@ class SearchController {
         platformsToQuery
       });
 
-      logger.info('Fetched posts', {
+      // Log at debug level
+      /*
+      logger.debug('Fetched posts', {
         campaignId: id,
         platforms: platformsToQuery,
         count: posts.length,
@@ -175,6 +179,7 @@ class SearchController {
         run_id,
         platform
       });
+      */
 
       res.json({ posts, count: posts.length });
     } catch (error) {
@@ -270,25 +275,6 @@ class SearchController {
   async getSentimentTrend(req, res) {
     try {
       const { id } = req.params;
-
-      // Use repository method - this was raw query before, simplified logic since repository has flexible getRuns?
-      // Actually we need a specific query for this stats projection, so adding a helper method or using raw query via adapter might be better.
-      // For now, let's just get all runs and map in memory or add a specific trend method to repo.
-      // Let's assume we add getSentimentTrend to analytics or campaign repo.
-      // Wait, I didn't add that to the repo yet. I will update the repo in a next step or inline it temporarily if needed.
-      // Actually, better to stick to the plan. I will assume I can fetch all runs and map them here for now, or use the db adapter directly via repo?
-      // No, let's keep it consistent. I will just fetch runs and process them.
-
-      // NOTE: Original used N1QL for specific projection.
-      // Let's assume we use campaignRepository.getRuns but it gets everything.
-      // Optimization: Add getRunsWithStats to repo?
-      // For now, let's just use getRuns and map. It might be heavier but keeps code clean.
-      // Or better, let's add `getSentimentTrend` to CampaignRepository. I will do that in a follow up "fix" or just accept the overhead.
-
-      // Actually, looking at previous code, it was selecting specific fields.
-      // I'll stick to full object retrieval for now to be safe, or I'd have to edit the repo file again.
-      // To strictly follow DRY, `getRuns` is reusable.
-
       const runs = await campaignRepository.getRuns(id, 1000); // explicit high limit
 
       const trend = runs
@@ -304,6 +290,72 @@ class SearchController {
       res.json({ trend });
     } catch (error) {
       logger.error('Failed to get sentiment trend', { error: error.message });
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Trigger manual summary generation for a specific run
+   */
+  async triggerRunSummaries(req, res) {
+    try {
+      const { id, runId } = req.params;
+
+      // Check if run exists
+      const run = await campaignRepository.getRun(runId);
+      if (!run) {
+        return res.status(404).json({ error: 'Run not found' });
+      }
+
+      // Trigger background generation
+      setImmediate(async () => {
+        try {
+          await this.generateRunArtifacts(id, runId);
+          logger.info('Manual summary generation completed', { runId });
+        } catch (err) {
+          logger.error('Manual summary generation failed', { runId, error: err.message });
+        }
+      });
+
+      res.json({ success: true, message: 'Summary generation started' });
+
+    } catch (error) {
+      logger.error('Failed to trigger summary generation', { error: error.message });
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Get semantic summary for a specific sentiment
+   */
+  async getSentimentSummary(req, res) {
+    try {
+      const { id } = req.params;
+      const { sentiment } = req.query;
+
+      if (!['positive', 'negative', 'neutral'].includes(sentiment)) {
+        return res.status(400).json({ error: 'Invalid sentiment. Must be positive, negative, or neutral' });
+      }
+
+      // 1. Fetch posts for this sentiment
+      // We use postRepository.getPosts but need to ensure it supports filtering efficiently
+      const posts = await postRepository.getPosts(id, {
+        limit: 50, // Analyze top 50 posts
+        sentiment: sentiment,
+        sort: 'engagement' // Focus on high impact posts
+      });
+
+      if (posts.length === 0) {
+        return res.json({ summary: `No ${sentiment} posts found to analyze.` });
+      }
+
+      // 2. Generate summary
+      const summary = await summaryGenerator.generateSentimentSummary(posts, sentiment);
+
+      res.json({ summary });
+
+    } catch (error) {
+      logger.error('Failed to get sentiment summary', { error: error.message });
       res.status(500).json({ error: error.message });
     }
   }
@@ -546,6 +598,87 @@ class SearchController {
 
     } catch (error) {
       logger.error('Failed to trigger manual run', { error: error.message });
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Get sentiment summary on-demand
+   */
+  async getSentimentSummary(req, res) {
+    try {
+      const { id } = req.params;
+      const { sentiment } = req.query;
+
+      const campaign = await campaignRepository.getById(id);
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+      // Fetch posts (using existing logic)
+      const posts = await postRepository.getPosts(id, {
+        limit: 30,
+        sentiment: sentiment,
+        sort: 'engagement',
+        platformsToQuery: campaign.platforms || [campaign.platform]
+      });
+
+      const summary = await summaryGenerator.generateSentimentSummary(posts, sentiment, campaign.query);
+
+      res.json({ summary });
+
+    } catch (error) {
+      logger.error('Failed to get sentiment summary', { error: error.message });
+      res.status(500).json({ error: error.message });
+    }
+  }
+
+  /**
+   * Get platform summary on-demand
+   */
+  async getPlatformSummary(req, res) {
+    try {
+      const { id } = req.params;
+      const { platform } = req.query;
+
+      logger.info(`Received platform summary request for campaign ${id} / platform ${platform}`);
+
+      if (!platform) return res.status(400).json({ error: 'Platform is required' });
+
+      const campaign = await campaignRepository.getById(id);
+      if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+      logger.info(`Fetched campaign: ${campaign.search_query}`);
+
+      // Fetch posts for this platform from LATEST/specific run? 
+      // Let's grab high engagement posts generally from this campaign
+
+      const posts = await postRepository.getPosts(id, {
+        limit: 30,
+        sort: 'engagement',
+        platformsToQuery: [platform]
+      });
+
+      logger.info(`Fetched ${posts.length} posts for platform ${platform}`);
+      logger.info('Starting LLM generation...');
+      const summary = await summaryGenerator.generatePlatformSummary(posts, platform, campaign.query);
+      logger.info('LLM generation complete');
+
+      // Persist to latest run (Sidecar Strategy)
+      try {
+        const latestRun = await campaignRepository.getLatestRun(id);
+        if (latestRun) {
+          await campaignRepository.savePlatformSummary(latestRun.id, platform, summary);
+          logger.info(`Persisted platform summary to run ${latestRun.id} (sidecar)`);
+        } else {
+          logger.warn('No runs found to persist summary');
+        }
+      } catch (dbError) {
+        logger.error('Failed to persist summary to DB', { error: dbError.message });
+      }
+
+      res.json({ summary });
+
+    } catch (error) {
+      logger.error('Failed to get platform summary', { error: error.message });
       res.status(500).json({ error: error.message });
     }
   }
@@ -862,6 +995,10 @@ class SearchController {
       logger.info('Step 4: Generating analytics...');
       await runScript('analytics', [campaignId, runId], 600000); // 10 mins
 
+      // Step 5: Generate Artifacts (Summaries)
+      logger.info('Step 5: Generating Summaries (Background)...');
+      await this.generateRunArtifacts(campaignId, runId);
+
       // Update run status
       const run = await campaignRepository.getRun(runId);
       if (run) {
@@ -905,7 +1042,124 @@ class SearchController {
     }
   }
 
+  /**
+   * Helper to generate all AI summaries for a run
+   */
+  async generateRunArtifacts(campaignId, runId) {
+    try {
+      const campaign = await campaignRepository.getById(campaignId);
+      const platforms = campaign.platforms || [campaign.platform];
+
+      // 1. Fetch Stats & Top Posts for Executive Summary
+      const platformStats = await analyticsRepository.getAggregatedStats(campaignId, platforms);
+      const aggregated = platformStats.reduce((acc, s) => ({
+        total_posts: acc.total_posts + Number(s.total_posts || 0),
+        positive_count: acc.positive_count + Number(s.positive_count || 0),
+        negative_count: acc.negative_count + Number(s.negative_count || 0),
+        sum_sentiment: acc.sum_sentiment + (Number(s.avg_sentiment || 0) * Number(s.total_posts || 0))
+      }), { total_posts: 0, positive_count: 0, negative_count: 0, sum_sentiment: 0 });
+
+      const avg_sentiment = aggregated.total_posts > 0 ? (aggregated.sum_sentiment / aggregated.total_posts) : 0;
+
+      const topPosts = await postRepository.getPosts(campaignId, {
+        limit: 20,
+        sort: 'engagement',
+        run_id: runId,
+        platformsToQuery: platforms
+      }) || []; // Ensure array
+
+      logger.info('Generating executive summary', { topPostsCount: topPosts.length });
+
+      const executiveSummary = await summaryGenerator.generateRunSummary({ id: runId }, {
+        ...aggregated,
+        avg_sentiment
+      }, topPosts, campaign.query);
+
+      // 2. Generate Sentiment Summaries
+      const sentiments = ['positive', 'negative', 'neutral'];
+      const sentimentSummaries = {};
+
+      for (const sentiment of sentiments) {
+        logger.info(`Fetching posts for sentiment: ${sentiment}`);
+        let sentimentPosts = [];
+        try {
+          sentimentPosts = await postRepository.getPosts(campaignId, {
+            limit: 30,
+            sentiment: sentiment,
+            run_id: runId, // strict to this run
+            sort: 'engagement',
+            platformsToQuery: platforms
+          });
+        } catch (err) {
+          logger.warn(`Failed to fetch posts for sentiment ${sentiment}`, { error: err.message });
+          continue;
+        }
+
+        if (sentimentPosts.length > 0) {
+          const distribution = sentimentPosts.reduce((acc, p) => {
+            acc[p.platform] = (acc[p.platform] || 0) + 1;
+            return acc;
+          }, {});
+
+          logger.info(`Generating summary for ${sentiment}`, {
+            count: sentimentPosts.length,
+            distribution
+          });
+
+          try {
+            // Pass campaign.query correctly (it was missing before)
+            const summary = await summaryGenerator.generateSentimentSummary(sentimentPosts, sentiment, campaign.query);
+            sentimentSummaries[sentiment] = summary;
+          } catch (err) {
+            logger.error(`Failed to generate ${sentiment} summary`, { error: err.message });
+          }
+        } else {
+          logger.info(`No posts found for sentiment ${sentiment}`);
+        }
+      }
+
+      // 3. Generate Platform Summaries
+      // We process these atomically to avoid race conditions with manual triggers
+      for (const platform of platforms) {
+        logger.info(`Generating summary for platform: ${platform}`);
+        try {
+          const platformPosts = await postRepository.getPosts(campaignId, {
+            limit: 25,
+            run_id: runId,
+            sort: 'engagement',
+            platformsToQuery: [platform]
+          });
+
+          let summary = "No posts found for this platform in this run.";
+          if (platformPosts && platformPosts.length > 0) {
+            summary = await summaryGenerator.generatePlatformSummary(platformPosts, platform, campaign.query);
+          }
+
+          // Atomic save
+          await campaignRepository.savePlatformSummary(runId, platform, summary);
+          logger.info(`Generated and saved summary for ${platform}`);
+
+        } catch (err) {
+          logger.error(`Failed to generate ${platform} summary`, { error: err.message });
+        }
+      }
+
+      // 4. Update Run (Executive and Sentiment only)
+      const run = await campaignRepository.getRun(runId);
+      if (run) {
+        run.summary = executiveSummary;
+        run.sentiment_summaries = sentimentSummaries;
+        // Do NOT overwrite platform_summaries here as they are handled atomically above
+        await campaignRepository.updateRun(runId, run);
+        logger.info('Run artifacts generated and saved', { runId });
+      }
+
+    } catch (error) {
+      logger.error('Failed to generate run artifacts', { runId, error: error.message });
+      throw error; // Allow caller to handle
+    }
+  }
+
 }
 
 module.exports = new SearchController();
-

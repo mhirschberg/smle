@@ -166,6 +166,11 @@ class PostRepository {
             ...platformData,
             raw_data: {
                 ...rawPost,
+                // Sanitize potential conflict fields
+                latest_comments: undefined,
+                edge_media_to_comment: undefined,
+                edge_media_to_caption: undefined,
+                edge_media_preview_comment: undefined,
                 engagement
             }
         };
@@ -259,6 +264,29 @@ class PostRepository {
         const platforms = platformManager.getSupportedPlatforms();
         const collections = platforms.map(p => platformManager.getCollection(p));
         return await db.getTotalPostCount(campaignId, collections);
+    }
+
+    async getById(id, platform) {
+        const db = await this.getDB();
+        const collection = platformManager.getCollection(platform);
+        return await db.get(collection, id);
+    }
+
+    async updateSmleVision(id, platform, smleVisionData) {
+        const db = await this.getDB();
+        const collection = platformManager.getCollection(platform);
+
+        // Fetch current document
+        const document = await db.get(collection, id);
+        if (!document) throw new Error(`Post not found: ${id}`);
+
+        // Update with smle_vision data
+        const updatedDoc = {
+            ...document,
+            smle_vision: smleVisionData
+        };
+
+        return await db.upsert(collection, id, updatedDoc);
     }
 }
 

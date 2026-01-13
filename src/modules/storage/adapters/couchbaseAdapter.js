@@ -46,6 +46,7 @@ class CouchbaseAdapter extends DatabaseAdapter {
                 youtube_posts: scope.collection('youtube_posts'),
                 linkedin_posts: scope.collection('linkedin_posts'),
                 analytics: scope.collection('analytics'),
+                search_run_insights: scope.collection('search_run_insights'),
                 users: scope.collection('_default')
             };
 
@@ -141,7 +142,13 @@ class CouchbaseAdapter extends DatabaseAdapter {
 
     async query(queryString, options = {}) {
         try {
-            const result = await this.cluster.query(queryString, options);
+            // Force RequestPlus consistency ensuring the index is up-to-date with KV operations
+            // This is critical for the UI to show 'processing' state immediately after 'upsert'
+            const queryOptions = {
+                scanConsistency: couchbase.QueryScanConsistency.RequestPlus,
+                ...options
+            };
+            const result = await this.cluster.query(queryString, queryOptions);
             return result.rows;
         } catch (error) {
             logger.error('Query failed', { queryString, error: error.message });
@@ -223,7 +230,10 @@ class CouchbaseAdapter extends DatabaseAdapter {
     async getPosts(campaignId, platformCollections, options = {}) {
         const { limit = 50, offset = 0, sort = 'sentiment', sentiment = 'all', run_id = null } = options;
 
-        let whereClause = `p.campaign_id = $id AND p.analysis_status = 'analyzed'`;
+        // Show posts that are either:
+        // 1. Fully text-analyzed (analysis_status = 'analyzed')
+        // 2. Have ANY smle_vision status
+        let whereClause = `p.campaign_id = $id AND (p.analysis_status = 'analyzed' OR p.smle_vision.status IS NOT MISSING)`;
         let params = { id: campaignId, limit: parseInt(limit), offset: parseInt(offset) };
 
         if (sentiment === 'positive') {
@@ -255,7 +265,10 @@ class CouchbaseAdapter extends DatabaseAdapter {
             SELECT * FROM (
                 ${unionQueries.join(' UNION ALL ')}
             ) AS combined
-            ORDER BY combined.${orderByField} DESC
+            ORDER BY 
+                CASE WHEN combined.smle_vision.status IS NOT MISSING THEN 1 ELSE 0 END DESC,
+                combined.${orderByField} DESC,
+                combined.id ASC
             LIMIT $limit OFFSET $offset
         `;
 
@@ -392,7 +405,12 @@ class CouchbaseAdapter extends DatabaseAdapter {
         return await Promise.all(statsPromises);
     }
 
-    async getPostsWithEmbeddings(campaignId, platformCollections, sentiment = null) {
+    async getPostsWithEmbeddings(campaignId, platformCollections, sentiment = null, contentTypes = null) {
+        let params = { campaignId };
+        if (contentTypes && contentTypes.length > 0) {
+            params.contentTypes = contentTypes;
+        }
+
         const unionQueries = platformCollections.map(collection => {
             const collectionPath = this.getCollectionPath(collection);
             let whereClause = `p.campaign_id = $campaignId AND p.analysis_status = 'analyzed' AND p.analysis.embedding IS NOT MISSING AND p.analysis.embedding IS NOT NULL`;
@@ -405,6 +423,10 @@ class CouchbaseAdapter extends DatabaseAdapter {
                 whereClause += ' AND p.analysis.sentiment_score < 4';
             }
 
+            if (contentTypes && contentTypes.length > 0) {
+                whereClause += ' AND p.content_type IN $contentTypes';
+            }
+
             return `
                 SELECT META().id as docId, p.*, '${collection}' as source_collection
                 FROM ${collectionPath} p
@@ -414,12 +436,70 @@ class CouchbaseAdapter extends DatabaseAdapter {
         });
 
         const query = unionQueries.join(' UNION ALL ');
-        const results = await this.query(query, { parameters: { campaignId } });
+        const results = await this.query(query, { parameters: params });
         return results.map(r => ({
             id: r.docId,
             ...(r.p || r),
             source_collection: r.source_collection
         }));
+    }
+
+    async getRunInsights(runIds) {
+        if (!runIds || runIds.length === 0) return {};
+
+        // Use KV Multi-Get for efficiency (faster than N1QL)
+        const collection = this.collections['search_run_insights'];
+        if (!collection) return {};
+
+        const insightsMap = {};
+        const timestamp = Date.now(); // For logging/stats if needed
+
+        // Parallel fetch
+        await Promise.all(runIds.map(async (id) => {
+            try {
+                const result = await collection.get(id);
+                // Couchbase stores content directly, not wrapped in 'doc' usually.
+                // But CampaignRepository falling back to upsert saves { platform_summaries: ... }
+                // So result.content IS the object.
+                if (result && result.content) {
+                    insightsMap[id] = result.content;
+                }
+            } catch (err) {
+                // Ignore missing content
+            }
+        }));
+
+        return insightsMap;
+    }
+
+    async updatePlatformSummary(collectionName, runId, platform, summary) {
+        // Use Couchbase Sub-Document API for atomic updates
+        // This is extremely efficient and race-condition free
+        try {
+            const collection = this.collections[collectionName] || this.collections['search_run_insights'];
+            if (!collection) throw new Error(`Collection ${collectionName} not found`);
+
+            // Check if we are targeting validity of collection?
+            // "search_runs" was passed by repo, but we redirect to "search_run_insights" internally?
+            // Repo calls: db.updatePlatformSummary('search_runs', ...)
+            // BUT Repo logic says: "We do NOT save 'platform_summaries' to main... Data is stored in 'search_run_insights'"
+            // So we should INTERCEPT 'search_runs' and redirect to 'search_run_insights'.
+
+            const targetCollection = this.collections['search_run_insights'];
+
+            // MutateIn performs atomic partial updates
+            await targetCollection.mutateIn(runId, [
+                couchbase.MutateInSpec.upsert(`platform_summaries.${platform}`, summary)
+            ], {
+                // Create document if it doesn't exist (Store Semantics)
+                storeSemantics: couchbase.StoreSemantics.Upsert
+            });
+
+            return true;
+        } catch (error) {
+            logger.error(`Failed to atomic update platform summary in couchbase`, { runId, platform, error: error.message });
+            throw error;
+        }
     }
 }
 

@@ -28,7 +28,8 @@ router.post('/:campaignId/nl-search', async (req, res) => {
       limit: parseInt(limit),
       minSimilarity: 0.3,  // Lower threshold for more results
       platforms: (parsedQuery?.platforms || ['all']).includes('all') ? null : parsedQuery.platforms,
-      sentiment: (parsedQuery?.sentiment || 'all') === 'all' ? null : parsedQuery.sentiment
+      sentiment: (parsedQuery?.sentiment || 'all') === 'all' ? null : parsedQuery.sentiment,
+      content_types: (parsedQuery?.content_types || []).length === 0 ? null : parsedQuery.content_types
     });
 
     logger.info('Search completed, returning results', {
