@@ -49,6 +49,7 @@ app.use('/api/search', nlSearchRoutes);
 app.use('/api/posts', require('./routes/posts'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/config', require('./routes/config'));
+app.use('/api/graph', require('./routes/graph'));
 
 // Error handler
 app.use((err, req, res, next) => {

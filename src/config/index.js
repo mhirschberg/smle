@@ -19,6 +19,11 @@ const config = {
       username: process.env.POSTGRES_USER || 'postgres',
       password: process.env.POSTGRES_PASSWORD || 'postgres',
       database: process.env.POSTGRES_DB || 'smle'
+    },
+    neo4j: {
+      uri: process.env.NEO4J_URI || 'bolt://localhost:7687',
+      username: process.env.NEO4J_USERNAME || 'neo4j',
+      password: process.env.NEO4J_PASSWORD || 'password'
     }
   },
 

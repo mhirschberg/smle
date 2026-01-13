@@ -68,4 +68,10 @@ export const postApi = {
   analyzeVideo: (data) => api.post('/posts/analyze-video-batch', data),
 };
 
+export const graphApi = {
+  getInfluence: (campaignId) => api.get(`/graph/influence/${campaignId}`),
+  getTopics: (campaignId) => api.get(`/graph/topics/${campaignId}`),
+  getSimilar: (postId) => api.get(`/graph/similar/${postId}`),
+};
+
 export default api;

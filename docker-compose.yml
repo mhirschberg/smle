@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Postgres with pgvector (Primary DB)
   postgres:
@@ -12,3 +10,15 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-smle}
     volumes:
       - ./db_data/postgres:/var/lib/postgresql/data
+
+  # Neo4j (Graph DB)
+  neo4j:
+    image: neo4j:latest
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=${NEO4J_USERNAME:-neo4j}/${NEO4J_PASSWORD:-password}
+    volumes:
+      - ./db_data/neo4j/data:/data
+      - ./db_data/neo4j/logs:/logs
