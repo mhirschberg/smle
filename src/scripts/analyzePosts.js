@@ -5,6 +5,7 @@ const llmAnalyzer = require('../modules/analysis/llmAnalyzer');
 const embeddingGenerator = require('../modules/analysis/embeddingGenerator');
 const logger = require('../utils/logger');
 const dbFactory = require('../modules/storage/dbFactory');
+const graphRepository = require('../modules/repositories/graphRepository');
 
 // Global error handlers to capture background crashes
 process.on('unhandledRejection', (reason, promise) => {
@@ -255,6 +256,16 @@ async function analyzePost(db, row, timestamp) {
       score: analysis.sentiment_score,
       topics: analysis.key_topics
     });
+
+    // Step 5: Sync to Neo4j graph asynchronously
+    try {
+      // We don't await this to avoid slowing down the main analysis loop
+      graphRepository.syncPost(post).catch(err => {
+        logger.warn('Background graph sync failed', { postId, error: err.message });
+      });
+    } catch (e) {
+      // ignore
+    }
 
     return { success: true, postId, platform: post.platform };
 

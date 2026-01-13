@@ -7,10 +7,11 @@ import ErrorBoundary from '../components/ErrorBoundary';
 import RunHistoryCard from '../components/RunHistoryCard';
 import SentimentFilter from '../components/SentimentFilter';
 import NaturalLanguageSearch from '../components/NaturalLanguageSearch';
-import { ArrowLeft, Loader, TrendingUp, Hash, MessageCircle, BarChart3, History, PlayCircle, Trash2, RefreshCw, Layers, Search, Eye, CheckSquare, Sparkles } from 'lucide-react';
+import { ArrowLeft, Loader, TrendingUp, Hash, MessageCircle, BarChart3, History, PlayCircle, Trash2, RefreshCw, Layers, Search, Eye, CheckSquare, Sparkles, Share2 } from 'lucide-react';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { postApi } from '../services/api';
 import SmleVisionGallery from '../components/SmleVisionGallery';
+import GraphVisualization from '../components/GraphVisualization';
 
 const SearchDetail = () => {
   const { id } = useParams();
@@ -507,6 +508,19 @@ const SearchDetail = () => {
             </button>
           )}
           <button
+            onClick={() => setActiveTab('network')}
+            className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'network'
+              ? 'text-blue-600 border-b-2 border-blue-600'
+              : 'text-gray-600 hover:text-gray-800'
+              }`}
+          >
+            <Share2 className="w-4 h-4" />
+            <span className="flex items-center">
+              Network Analysis
+              <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 text-[10px] rounded-full uppercase">New</span>
+            </span>
+          </button>
+          <button
             onClick={() => setActiveTab('runs')}
             className={`flex items-center space-x-2 px-6 py-4 font-medium whitespace-nowrap ${activeTab === 'runs'
               ? 'text-blue-600 border-b-2 border-blue-600'
@@ -576,6 +590,22 @@ const SearchDetail = () => {
             ))}
             onRefresh={loadData}
           />
+        </ErrorBoundary>
+      )}
+
+      {activeTab === 'network' && (
+        <ErrorBoundary>
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-xl font-semibold text-gray-800">Knowledge Graph & Network Analysis</h3>
+                  <p className="text-sm text-gray-600">Discover hidden connections between influencers and topics using Neo4j graph processing.</p>
+                </div>
+              </div>
+              <GraphVisualization campaignId={id} />
+            </div>
+          </div>
         </ErrorBoundary>
       )}
 
@@ -762,316 +792,325 @@ const SearchDetail = () => {
 
           )}
         </div>
-      )}
+      )
+      }
 
-      {activeTab === 'platforms' && isMultiPlatform && (
-        <div className="space-y-6">
-          <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-            <h3 className="text-xl font-semibold text-gray-800 mb-4">
-              Performance by Platform
-            </h3>
+      {
+        activeTab === 'platforms' && isMultiPlatform && (
+          <div className="space-y-6">
+            <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <h3 className="text-xl font-semibold text-gray-800 mb-4">
+                Performance by Platform
+              </h3>
 
-            {/* Platform Breakdown */}
-            {stats?.by_platform && (
-              <div className="space-y-4">
-                {Object.entries(stats.by_platform)
-                  .filter(([_, platformStats]) => platformStats.total_posts > 0)
-                  .map(([platform, platformStats]) => (
-                    <div
-                      key={platform}
-                      className="p-4 border border-gray-200 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="flex items-center justify-between mb-3 cursor-pointer"
-                        onClick={() => {
-                          setPlatformFilter(platform);
-                          setActiveTab('posts');
-                        }}
+              {/* Platform Breakdown */}
+              {stats?.by_platform && (
+                <div className="space-y-4">
+                  {Object.entries(stats.by_platform)
+                    .filter(([_, platformStats]) => platformStats.total_posts > 0)
+                    .map(([platform, platformStats]) => (
+                      <div
+                        key={platform}
+                        className="p-4 border border-gray-200 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors"
                       >
-                        <div className="flex items-center space-x-3">
-                          <span className="text-3xl">{getPlatformIcon(platform)}</span>
-                          <div>
-                            <h4 className="font-semibold text-gray-800 capitalize">{platform}</h4>
-                            <p className="text-sm text-gray-600">
-                              {platformStats.analyzed_posts || 0} / {platformStats.total_posts || 0} posts analyzed
-                            </p>
-                          </div>
-                        </div>
-                        {platformStats.avg_sentiment > 0 && (
-                          <div className="text-right">
-                            <div className={`text-3xl font-bold ${getSentimentColor(platformStats.avg_sentiment)}`}>
-                              {platformStats.avg_sentiment.toFixed(1)}
+                        <div className="flex items-center justify-between mb-3 cursor-pointer"
+                          onClick={() => {
+                            setPlatformFilter(platform);
+                            setActiveTab('posts');
+                          }}
+                        >
+                          <div className="flex items-center space-x-3">
+                            <span className="text-3xl">{getPlatformIcon(platform)}</span>
+                            <div>
+                              <h4 className="font-semibold text-gray-800 capitalize">{platform}</h4>
+                              <p className="text-sm text-gray-600">
+                                {platformStats.analyzed_posts || 0} / {platformStats.total_posts || 0} posts analyzed
+                              </p>
                             </div>
-                            <div className="text-xs text-gray-500">avg sentiment</div>
                           </div>
-                        )}
-                      </div>
+                          {platformStats.avg_sentiment > 0 && (
+                            <div className="text-right">
+                              <div className={`text-3xl font-bold ${getSentimentColor(platformStats.avg_sentiment)}`}>
+                                {platformStats.avg_sentiment.toFixed(1)}
+                              </div>
+                              <div className="text-xs text-gray-500">avg sentiment</div>
+                            </div>
+                          )}
+                        </div>
 
-                      {/* Platform Summary Section */}
-                      <div className="mt-4 pt-4 border-t border-gray-200 cursor-default">
-                        <div className="flex items-center justify-between mb-2">
-                          <h5 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center">
-                            <Sparkles className="w-3 h-3 mr-1" /> AI Insights
-                          </h5>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleGeneratePlatformSummary(platform);
-                            }}
-                            className="relative z-10 text-xs text-purple-600 hover:text-purple-800 flex items-center space-x-1 border border-purple-100 px-2 py-1 rounded-full hover:bg-purple-50 transition-colors"
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            <span>
-                              {(selectedRun
+                        {/* Platform Summary Section */}
+                        <div className="mt-4 pt-4 border-t border-gray-200 cursor-default">
+                          <div className="flex items-center justify-between mb-2">
+                            <h5 className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center">
+                              <Sparkles className="w-3 h-3 mr-1" /> AI Insights
+                            </h5>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleGeneratePlatformSummary(platform);
+                              }}
+                              className="relative z-10 text-xs text-purple-600 hover:text-purple-800 flex items-center space-x-1 border border-purple-100 px-2 py-1 rounded-full hover:bg-purple-50 transition-colors"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              <span>
+                                {(selectedRun
+                                  ? getPlatformSummary(runs.find(r => r.id === selectedRun), platform)
+                                  : getPlatformSummary(runs[0], platform)
+                                ) ? 'Regenerate' : 'Generate'}
+                              </span>
+                            </button>
+                          </div>
+
+                          {(selectedRun
+                            ? getPlatformSummary(runs.find(r => r.id === selectedRun), platform)
+                            : getPlatformSummary(runs[0], platform)
+                          ) ? (
+                            <p className="text-sm text-gray-700 whitespace-pre-line leading-relaxed">
+                              {selectedRun
                                 ? getPlatformSummary(runs.find(r => r.id === selectedRun), platform)
                                 : getPlatformSummary(runs[0], platform)
-                              ) ? 'Regenerate' : 'Generate'}
-                            </span>
-                          </button>
+                              }
+                            </p>
+                          ) : (
+                            <p className="text-sm text-gray-400 italic">No summary generated yet.</p>
+                          )}
                         </div>
 
-                        {(selectedRun
-                          ? getPlatformSummary(runs.find(r => r.id === selectedRun), platform)
-                          : getPlatformSummary(runs[0], platform)
-                        ) ? (
-                          <p className="text-sm text-gray-700 whitespace-pre-line leading-relaxed">
-                            {selectedRun
-                              ? getPlatformSummary(runs.find(r => r.id === selectedRun), platform)
-                              : getPlatformSummary(runs[0], platform)
-                            }
-                          </p>
-                        ) : (
-                          <p className="text-sm text-gray-400 italic">No summary generated yet.</p>
-                        )}
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3 text-center text-sm mt-4">
-                        <div className="bg-white rounded p-2">
-                          <div className="font-bold text-gray-800">
-                            {platformStats.total_posts || 0}
+                        <div className="grid grid-cols-2 gap-3 text-center text-sm mt-4">
+                          <div className="bg-white rounded p-2">
+                            <div className="font-bold text-gray-800">
+                              {platformStats.total_posts || 0}
+                            </div>
+                            <div className="text-xs text-gray-600">Total Scraped</div>
                           </div>
-                          <div className="text-xs text-gray-600">Total Scraped</div>
-                        </div>
-                        <div className="bg-white rounded p-2">
-                          <div className="font-bold text-gray-800">
-                            {platformStats.analyzed_posts || 0}
+                          <div className="bg-white rounded p-2">
+                            <div className="font-bold text-gray-800">
+                              {platformStats.analyzed_posts || 0}
+                            </div>
+                            <div className="text-xs text-gray-600">Total Analyzed</div>
                           </div>
-                          <div className="text-xs text-gray-600">Total Analyzed</div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-              </div>
-            )}
-
-            {(!stats?.by_platform || Object.values(stats.by_platform).every(p => p.total_posts === 0)) && (
-              <div className="text-center py-8 text-gray-500">
-                <Layers className="w-12 h-12 mx-auto mb-3 text-gray-400" />
-                <p>No platform data available yet. Run the campaign to see breakdown.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'runs' && (
-        <div>
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-gray-800">
-                Run History ({runs.length} total)
-              </h3>
-              <p className="text-sm text-gray-600">
-                View details and sentiment for each search execution
-              </p>
-            </div>
-            <button
-              onClick={handleRunNow}
-              disabled={triggering || hasRunningRun}
-              className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium shadow-md"
-            >
-              {triggering || hasRunningRun ? (
-                <>
-                  <Loader className="w-5 h-5 animate-spin" />
-                  <span>Running...</span>
-                </>
-              ) : (
-                <>
-                  <PlayCircle className="w-5 h-5" />
-                  <span>New Run</span>
-                </>
+                    ))}
+                </div>
               )}
-            </button>
-          </div>
 
-          {runs.length === 0 ? (
-            <div className="text-center py-12 bg-white rounded-lg shadow-md">
-              <History className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600 mb-4">No runs yet</p>
+              {(!stats?.by_platform || Object.values(stats.by_platform).every(p => p.total_posts === 0)) && (
+                <div className="text-center py-8 text-gray-500">
+                  <Layers className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                  <p>No platform data available yet. Run the campaign to see breakdown.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      }
+
+      {
+        activeTab === 'runs' && (
+          <div>
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800">
+                  Run History ({runs.length} total)
+                </h3>
+                <p className="text-sm text-gray-600">
+                  View details and sentiment for each search execution
+                </p>
+              </div>
               <button
                 onClick={handleRunNow}
-                className="inline-flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                disabled={triggering || hasRunningRun}
+                className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium shadow-md"
               >
-                <PlayCircle className="w-5 h-5" />
-                <span>Start First Run</span>
+                {triggering || hasRunningRun ? (
+                  <>
+                    <Loader className="w-5 h-5 animate-spin" />
+                    <span>Running...</span>
+                  </>
+                ) : (
+                  <>
+                    <PlayCircle className="w-5 h-5" />
+                    <span>New Run</span>
+                  </>
+                )}
               </button>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {runs.map(run => (
-                <RunHistoryCard
-                  key={run.id}
-                  run={run}
-                  onClick={() => {
-                    setSelectedRun(run.id);
-                    setActiveTab('posts');
-                  }}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
-      {activeTab === 'posts' && (
-        <div>
-          {/* Sentiment Filter */}
-          <SentimentFilter
-            selected={sentimentFilter}
-            onSelect={setSentimentFilter}
-            counts={{
-              positive: stats?.positive_count || 0,
-              neutral: stats?.neutral_count || 0,
-              negative: stats?.negative_count || 0
-            }}
-          />
-
-          {/* Platform Filter (for multi-platform campaigns) */}
-          {isMultiPlatform && (
-            <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200 mb-6">
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">Filter by Platform</h3>
-              <div className="flex flex-wrap gap-2">
+            {runs.length === 0 ? (
+              <div className="text-center py-12 bg-white rounded-lg shadow-md">
+                <History className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600 mb-4">No runs yet</p>
                 <button
-                  onClick={() => setPlatformFilter('all')}
-                  className={`px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === 'all'
-                    ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
-                    : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
-                    }`}
+                  onClick={handleRunNow}
+                  className="inline-flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                 >
-                  All Platforms
+                  <PlayCircle className="w-5 h-5" />
+                  <span>Start First Run</span>
                 </button>
-                {platforms.map(platform => (
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {runs.map(run => (
+                  <RunHistoryCard
+                    key={run.id}
+                    run={run}
+                    onClick={() => {
+                      setSelectedRun(run.id);
+                      setActiveTab('posts');
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      }
+
+      {
+        activeTab === 'posts' && (
+          <div>
+            {/* Sentiment Filter */}
+            <SentimentFilter
+              selected={sentimentFilter}
+              onSelect={setSentimentFilter}
+              counts={{
+                positive: stats?.positive_count || 0,
+                neutral: stats?.neutral_count || 0,
+                negative: stats?.negative_count || 0
+              }}
+            />
+
+            {/* Platform Filter (for multi-platform campaigns) */}
+            {isMultiPlatform && (
+              <div className="bg-white rounded-lg shadow-md p-4 border border-gray-200 mb-6">
+                <h3 className="text-sm font-semibold text-gray-700 mb-3">Filter by Platform</h3>
+                <div className="flex flex-wrap gap-2">
                   <button
-                    key={platform}
-                    onClick={() => setPlatformFilter(platform)}
-                    className={`flex items-center space-x-2 px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === platform
+                    onClick={() => setPlatformFilter('all')}
+                    className={`px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === 'all'
                       ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
                       : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
                       }`}
                   >
-                    <span className="text-lg">{getPlatformIcon(platform)}</span>
-                    <span className="capitalize">{platform}</span>
+                    All Platforms
                   </button>
-                ))}
+                  {platforms.map(platform => (
+                    <button
+                      key={platform}
+                      onClick={() => setPlatformFilter(platform)}
+                      className={`flex items-center space-x-2 px-4 py-2 rounded-lg border-2 transition-all ${platformFilter === platform
+                        ? 'border-blue-500 bg-blue-50 text-blue-700 font-semibold'
+                        : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                        }`}
+                    >
+                      <span className="text-lg">{getPlatformIcon(platform)}</span>
+                      <span className="capitalize">{platform}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Run Filter */}
-          {selectedRun && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 flex items-center justify-between">
-              <div>
-                <span className="text-sm text-blue-800">
-                  Showing posts from Run #{runs.find(r => r.id === selectedRun)?.run_number}
-                </span>
-              </div>
-              <button
-                onClick={() => setSelectedRun(null)}
-                className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-              >
-                Show All Runs
-              </button>
-            </div>
-          )}
-
-          {/* Posts Grid */}
-          {posts.length === 0 ? (
-            <div className="text-center py-12 bg-white rounded-lg shadow-md">
-              <MessageCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <p className="text-gray-600">No posts found with selected filters</p>
-              {(selectedRun || platformFilter !== 'all' || sentimentFilter !== 'all') && (
+            {/* Run Filter */}
+            {selectedRun && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4 flex items-center justify-between">
+                <div>
+                  <span className="text-sm text-blue-800">
+                    Showing posts from Run #{runs.find(r => r.id === selectedRun)?.run_number}
+                  </span>
+                </div>
                 <button
-                  onClick={() => {
-                    setSelectedRun(null);
-                    setPlatformFilter('all');
-                    setSentimentFilter('all');
-                  }}
-                  className="mt-4 text-blue-600 hover:text-blue-800"
+                  onClick={() => setSelectedRun(null)}
+                  className="text-sm text-blue-600 hover:text-blue-800 font-medium"
                 >
-                  Clear all filters
+                  Show All Runs
                 </button>
-              )}
-            </div>
-          ) : (
-            <>
-              <div className="mb-4 text-sm text-gray-600">
-                Showing {posts.length} post{posts.length === 1 ? '' : 's'}
-                {sentimentFilter !== 'all' && ` (${sentimentFilter})`}
-                {platformFilter !== 'all' && ` from ${platformFilter}`}
-                {selectedRun && ` from Run #${runs.find(r => r.id === selectedRun)?.run_number}`}
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {posts.map(post => (
-                  <PostCard
-                    key={post.id}
-                    post={post}
-                    isSelected={selectedPosts.some(p => p.id === post.id)}
-                    onSelect={handleToggleSelect}
-                  />
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      )}
+            )}
 
-      {/* Selection Bar overlay */}
-      {selectedPosts.length > 0 && (
-        <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-50 bg-indigo-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center space-x-8 animate-in slide-in-from-bottom duration-300">
-          <div className="flex items-center space-x-3">
-            <div className="bg-white/20 p-2 rounded-lg">
-              <CheckSquare className="w-6 h-6" />
-            </div>
-            <div>
-              <div className="text-sm font-bold leading-tight">{selectedPosts.length} Videos Selected</div>
-              <div className="text-[10px] opacity-80 uppercase tracking-widest font-bold">smle vision queue</div>
-            </div>
-          </div>
-          <div className="h-8 w-px bg-white/20"></div>
-          <button
-            onClick={handleBatchAnalyze}
-            disabled={analyzing}
-            className="bg-white text-indigo-600 px-6 py-2 rounded-xl font-bold hover:bg-indigo-50 transition-all shadow-lg active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 flex items-center space-x-2"
-          >
-            {analyzing ? (
-              <>
-                <Loader className="w-4 h-4 animate-spin" />
-                <span>Starting AI...</span>
-              </>
+            {/* Posts Grid */}
+            {posts.length === 0 ? (
+              <div className="text-center py-12 bg-white rounded-lg shadow-md">
+                <MessageCircle className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+                <p className="text-gray-600">No posts found with selected filters</p>
+                {(selectedRun || platformFilter !== 'all' || sentimentFilter !== 'all') && (
+                  <button
+                    onClick={() => {
+                      setSelectedRun(null);
+                      setPlatformFilter('all');
+                      setSentimentFilter('all');
+                    }}
+                    className="mt-4 text-blue-600 hover:text-blue-800"
+                  >
+                    Clear all filters
+                  </button>
+                )}
+              </div>
             ) : (
               <>
-                <Sparkles className="w-4 h-4" />
-                <span>Analyze Now</span>
+                <div className="mb-4 text-sm text-gray-600">
+                  Showing {posts.length} post{posts.length === 1 ? '' : 's'}
+                  {sentimentFilter !== 'all' && ` (${sentimentFilter})`}
+                  {platformFilter !== 'all' && ` from ${platformFilter}`}
+                  {selectedRun && ` from Run #${runs.find(r => r.id === selectedRun)?.run_number}`}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {posts.map(post => (
+                    <PostCard
+                      key={post.id}
+                      post={post}
+                      isSelected={selectedPosts.some(p => p.id === post.id)}
+                      onSelect={handleToggleSelect}
+                    />
+                  ))}
+                </div>
               </>
             )}
-          </button>
-          <button
-            onClick={() => setSelectedPosts([])}
-            className="text-white/60 hover:text-white text-xs font-medium"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
+          </div>
+        )
+      }
+
+      {/* Selection Bar overlay */}
+      {
+        selectedPosts.length > 0 && (
+          <div className="fixed bottom-8 left-1/2 transform -translate-x-1/2 z-50 bg-indigo-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center space-x-8 animate-in slide-in-from-bottom duration-300">
+            <div className="flex items-center space-x-3">
+              <div className="bg-white/20 p-2 rounded-lg">
+                <CheckSquare className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="text-sm font-bold leading-tight">{selectedPosts.length} Videos Selected</div>
+                <div className="text-[10px] opacity-80 uppercase tracking-widest font-bold">smle vision queue</div>
+              </div>
+            </div>
+            <div className="h-8 w-px bg-white/20"></div>
+            <button
+              onClick={handleBatchAnalyze}
+              disabled={analyzing}
+              className="bg-white text-indigo-600 px-6 py-2 rounded-xl font-bold hover:bg-indigo-50 transition-all shadow-lg active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 flex items-center space-x-2"
+            >
+              {analyzing ? (
+                <>
+                  <Loader className="w-4 h-4 animate-spin" />
+                  <span>Starting AI...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4" />
+                  <span>Analyze Now</span>
+                </>
+              )}
+            </button>
+            <button
+              onClick={() => setSelectedPosts([])}
+              className="text-white/60 hover:text-white text-xs font-medium"
+            >
+              Cancel
+            </button>
+          </div>
+        )
+      }
 
       {/* Delete Confirmation */}
       <ConfirmDialog
@@ -1084,7 +1123,7 @@ const SearchDetail = () => {
         cancelText="Cancel"
         variant="danger"
       />
-    </div>
+    </div >
   );
 };
 

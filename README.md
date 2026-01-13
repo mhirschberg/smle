@@ -123,6 +123,24 @@ Beyond text analysis, **SMLE Vision** provides AI-powered video content analysis
 - **Bright Data Credentials**:
   - Scraping Browser (for TikTok/Instagram)
   - Web Unlocker (for YouTube)
+- `UNLOCKER_USERNAME` and `UNLOCKER_PASSWORD` - Web Unlocker credentials
+
+These are required for downloading videos from TikTok, Instagram, and YouTube.
+
+## Interactive Network Graph
+
+Go beyond simple lists with our new Force-Directed Graph visualization. This tool allows you to see the "shape" of the conversation.
+
+### Three Distinct Views
+*   **Influencer Network** (Blue): Visualizes who is talking to whom. Node size represents influence score, derived from post volume and topic diversity.
+*   **Topic Clusters** (Indigo): Shows the semantic relationships between themes. See how concepts like "AI" and "Ethics" naturally group together.
+*   **Community Tribes** (Emerald): Automatically detects and groups authors into sub-communities based on shared interests and interaction patterns.
+
+### Narrative Pathfinding (Magic Wand)
+Discover how two seemingly unconnected people are linked.
+*   **Magic Wand**: Click the Sparkles icon (`✨`) to instantly find a guaranteed connection in the current network. The system calculates the shortest "Narrative Bridge" between two agents.
+*   **Interactive Mode**: Manually select any **Start** node and **Target** node to query the engine for a path.
+*   **Visual Feedback**: The path is highlighted in gold with animated particles flowing between the nodes, proving the chain of influence.
 
 ## Why This Matters
 
@@ -134,6 +152,7 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 ## Features
 - **Multi-Platform Tracking**: Monitor campaigns on Instagram, TikTok, Reddit, YouTube, and more.
 - **Sentiment Analysis**: Automated sentiment scoring for posts.
+- **Interactive Network Graph**: Visual exploration of influencer nodes and narrative paths.
 - **SMLE Vision**: AI-powered video content analysis with frame-by-frame insights.
 - **Semantic Search**: Natural language queries across all platforms using vector embeddings.
 - **Real-time Dashboard**: Visualize campaign performance and trends.
@@ -143,8 +162,8 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 ## Prerequisites
 
 - **Node.js**: v18+
-- **Database Server**: Right now we support [Couchbase](https://www.couchbase.com), [CrateDB](https://cratedb.com/) and [PostgreSQL](https://www.postgresql.org/) (with pgvector extension). Further databases can be added easily.
-- **Docker**: For running PostgreSQL locally.
+- **Database Server**: Right now we support [Couchbase](https://www.couchbase.com), [CrateDB](https://cratedb.com/), [PostgreSQL](https://www.postgresql.org/) (with pgvector), and [Neo4j](https://neo4j.com/).
+- **Docker**: For running PostgreSQL/Neo4j locally.
 - **BrightData Account**: For SERP and scraping capabilities.
 
 
@@ -172,11 +191,18 @@ We can now spin up a campaign in seconds, walk away for coffee, and return to a 
 
 Before running the application, you must start your chosen database.  
 We recommend using a cloud instance of [Couchbase Capella](https://cloud.couchbase.com/sign-up?) or [CrateDB Cloud](https://console.cratedb.cloud/) for the easiest setup.
+[Neo4j Aura](https://console-preview.neo4j.io/) is also a good option for the network graphinstead of a local instance.
 
 If you prefer running **PostgreSQL** locally via Docker:
 
 ```bash
-docker-compose up -d
+docker-compose up -d postgres
+```
+
+If you prefer running **Neo4j** locally via Docker:
+
+```bash
+docker-compose up -d neo4j
 ```
 
 ## Configuration
